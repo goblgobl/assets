@@ -1,0 +1,7 @@
+{
+	"upstreams": {
+		"test": {
+			"base_url": "http://localhost:5400/x1"
+		}
+	}
+}

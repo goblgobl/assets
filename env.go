@@ -1,0 +1,56 @@
+package assets
+
+import "src.goblgobl.com/utils/log"
+
+type Env struct {
+	requestId string
+
+	upstream *Upstream
+
+	// Anything logged with this logger will automatically have the rid
+	// (request id) field
+	logger log.Logger
+}
+
+func NewEnv(upstream *Upstream) *Env {
+	requestId := upstream.NextRequestId()
+
+	logger := log.Checkout().
+		Field(upstream.logField).
+		String("rid", requestId).
+		MultiUse()
+
+	return &Env{
+		logger:    logger,
+		upstream:  upstream,
+		requestId: requestId,
+	}
+}
+
+func (e *Env) RequestId() string {
+	return e.requestId
+}
+
+func (e *Env) Info(ctx string) log.Logger {
+	return e.logger.Info(ctx)
+}
+
+func (e *Env) Warn(ctx string) log.Logger {
+	return e.logger.Warn(ctx)
+}
+
+func (e *Env) Error(ctx string) log.Logger {
+	return e.logger.Error(ctx)
+}
+
+func (e *Env) Fatal(ctx string) log.Logger {
+	return e.logger.Fatal(ctx)
+}
+
+func (e *Env) Request(route string) log.Logger {
+	return e.logger.Request(route)
+}
+
+func (e *Env) Release() {
+	e.logger.Release()
+}

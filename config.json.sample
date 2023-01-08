@@ -1,0 +1,10 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "upstreams": {
+    "google": {
+      "base_url": "https://www.google.com/images/branding/"
+    }
+  }
+}
