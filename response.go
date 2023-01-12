@@ -6,10 +6,12 @@ import (
 	"io"
 	gohttp "net/http"
 	"os"
+	"time"
 
 	"github.com/valyala/fasthttp"
 	"src.goblgobl.com/utils"
 	"src.goblgobl.com/utils/buffer"
+	"src.goblgobl.com/utils/http"
 	"src.goblgobl.com/utils/log"
 )
 
@@ -18,6 +20,11 @@ var (
 	ErrInvalidResponseHeaderLength = errors.New("Serialized response header is invalid")
 	ErrInvalidResponseVersion      = errors.New("Serialized response is an unsuported version")
 )
+
+type Response interface {
+	http.Response
+	Path(string)
+}
 
 type RemoteResponse struct {
 	path         string
@@ -28,8 +35,9 @@ type RemoteResponse struct {
 	expires      uint32
 }
 
-func NewRemoteResponse(res *gohttp.Response, buf *buffer.Buffer, expires uint32) *RemoteResponse {
+func NewRemoteResponse(res *gohttp.Response, buf *buffer.Buffer, ttl uint32) *RemoteResponse {
 	h := res.Header
+	expires := uint32(time.Now().Add(time.Duration(ttl) * time.Second).Unix())
 	return &RemoteResponse{
 		buffer:       buf,
 		expires:      expires,
@@ -39,9 +47,8 @@ func NewRemoteResponse(res *gohttp.Response, buf *buffer.Buffer, expires uint32)
 	}
 }
 
-func (r *RemoteResponse) Path(path string) *RemoteResponse {
+func (r *RemoteResponse) Path(path string) {
 	r.path = path
-	return r
 }
 
 func (r *RemoteResponse) Write(conn *fasthttp.RequestCtx, logger log.Logger) log.Logger {
@@ -137,9 +144,8 @@ func NewLocalResponse(upstream *Upstream, file *os.File) (*LocalResponse, error)
 	}, nil
 }
 
-func (r *LocalResponse) Path(path string) *LocalResponse {
+func (r *LocalResponse) Path(path string) {
 	r.path = path
-	return r
 }
 
 func (r *LocalResponse) Write(conn *fasthttp.RequestCtx, logger log.Logger) log.Logger {

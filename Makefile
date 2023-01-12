@@ -1,6 +1,6 @@
 .PHONY: t
 t: commit.txt
-	go test .
+	go test -race -count=1 .
 
 .PHONY: commit.txt
 commit.txt:

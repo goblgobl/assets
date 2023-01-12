@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	gohttp "net/http"
@@ -16,7 +17,13 @@ import (
 	"src.goblgobl.com/utils/log"
 )
 
+var (
+	errSingleflightLocalLoad = errors.New("Singleflight local load error")
+)
+
 type Upstream struct {
+	name string
+
 	client *gohttp.Client
 
 	// Upstream-specific counter for generating the RequestId
@@ -66,6 +73,7 @@ func NewUpstream(name string, config *upstreamConfig) (*Upstream, error) {
 	}
 
 	return &Upstream{
+		sf:         new(singleflight.Group),
 		baseURL:    config.BaseURL,
 		client:     &gohttp.Client{},
 		cacheRoot:  cacheRoot,
@@ -101,7 +109,7 @@ func (u *Upstream) IsFileCached(cacheKey string, env *Env) (string, bool) {
 	return cachePath, false
 }
 
-func (u *Upstream) LoadLocal(encodedPath string, env *Env) (*LocalResponse, string) {
+func (u *Upstream) LoadLocal(encodedPath string, env *Env, force bool) (*LocalResponse, string) {
 	cachePath := u.CachePath(encodedPath)
 	f, err := os.Open(cachePath)
 	if err != nil {
@@ -118,10 +126,13 @@ func (u *Upstream) LoadLocal(encodedPath string, env *Env) (*LocalResponse, stri
 		return nil, cachePath
 	}
 
-	expires := int(res.expires)
-	if expires != 0 && int64(expires) < time.Now().Unix() {
-		res.Close()
-		return nil, cachePath
+	// callers can opt to ignore the expiration
+	if !force {
+		expires := int(res.expires)
+		if expires != 0 && int64(expires) < time.Now().Unix() {
+			res.Close()
+			return nil, cachePath
+		}
 	}
 
 	return res, cachePath
@@ -141,38 +152,59 @@ func (u *Upstream) CachePath(cacheKey string) string {
 	return b.String()
 }
 
-func (u *Upstream) GetSaveAndServe(remotePath string, local string, env *Env) (*RemoteResponse, error) {
-	remoteURL := u.baseURL + remotePath
-	res, err := u.client.Get(remoteURL)
-	if err != nil {
-		return nil, log.StructuredError{
-			Err:  err,
-			Code: ERR_PROXY,
-			Data: map[string]any{"url": remoteURL},
+func (u *Upstream) GetSaveAndServe(remotePath string, local string, env *Env) (Response, error) {
+	owner := false
+
+	res, err, shared := u.sf.Do(remotePath, func() (any, error) {
+		owner = true
+		remoteURL := u.baseURL + remotePath
+		res, err := u.client.Get(remoteURL)
+		if err != nil {
+			return nil, log.StructuredError{
+				Err:  err,
+				Code: ERR_PROXY,
+				Data: map[string]any{"url": remoteURL},
+			}
 		}
-	}
 
-	bodyReader := res.Body
-	defer bodyReader.Close()
+		bodyReader := res.Body
+		defer bodyReader.Close()
 
-	buf := u.buffers.Checkout()
-	_, err = io.Copy(buf, bodyReader)
+		buf := u.buffers.Checkout()
+		_, err = io.Copy(buf, bodyReader)
+
+		if err != nil {
+			buf.Release()
+			env.Error("Upstream.GetSaveAndServe.Copy").Err(err).Log()
+			return nil, err
+		}
+
+		if err := buf.Error(); err != nil {
+			buf.Release()
+			env.Error("Upstream.GetSaveAndServe.Buffer").Err(err).Log()
+			return nil, err
+		}
+
+		ttl := u.calculateTTL(res)
+		response := NewRemoteResponse(res, buf, ttl)
+		u.save(response, local, env)
+		return response, nil
+	})
 
 	if err != nil {
-		buf.Release()
-		return nil, fmt.Errorf("Upstream.SaveToPath copy - %w", err)
+		return nil, err
 	}
 
-	if err := buf.Error(); err != nil {
-		buf.Release()
-		return nil, fmt.Errorf("Upstream.SaveToPath buffer - %w", err)
+	if !shared || owner {
+		return res.(*RemoteResponse), nil
 	}
 
-	expires := u.calculateExpires(res)
-
-	response := NewRemoteResponse(res, buf, expires)
-	u.save(response, local, env)
-	return response, nil
+	localRes, _ := u.LoadLocal(EncodePath(remotePath), env, true)
+	if localRes == nil {
+		env.Error("Upstream.GetSaveAndServe.LoadLocal").String("remote", remotePath).Log()
+		return nil, errSingleflightLocalLoad
+	}
+	return localRes, nil
 }
 
 // We log the error here, because some cases won't care about this error
@@ -197,7 +229,7 @@ func (u *Upstream) save(response *RemoteResponse, local string, env *Env) error 
 	return nil
 }
 
-func (u *Upstream) calculateExpires(res *gohttp.Response) uint32 {
+func (u *Upstream) calculateTTL(res *gohttp.Response) uint32 {
 	status := res.StatusCode
 	ttl, exists := u.ttls[status]
 

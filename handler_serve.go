@@ -27,16 +27,18 @@ func ServeHandler(conn *fasthttp.RequestCtx, env *Env) (http.Response, error) {
 func serveStatic(conn *fasthttp.RequestCtx, env *Env, path string, compress bool) (http.Response, error) {
 	upstream := env.upstream
 
-	localRes, cachePath := upstream.LoadLocal(EncodePath(path), env)
+	localRes, cachePath := upstream.LoadLocal(EncodePath(path), env, false)
 	if localRes != nil {
-		return localRes.Path(path), nil
+		localRes.Path(path)
+		return localRes, nil
 	}
 
 	remoteRes, err := upstream.GetSaveAndServe(path, cachePath, env)
 	if err != nil {
 		return nil, err
 	}
-	return remoteRes.Path(path), nil
+	remoteRes.Path(path)
+	return remoteRes, nil
 }
 
 func EncodePath(path string) string {

@@ -103,7 +103,7 @@ func Test_Upstream_LoadLocal(t *testing.T) {
 		cacheControl: "private;max-age=9",
 	})
 
-	res, path := u.LoadLocal(EncodePath("sample1.css"), nil)
+	res, path := u.LoadLocal(EncodePath("sample1.css"), nil, false)
 	assert.Equal(t, path, "tests/up1_local/c2/c2FtcGxlMS5jc3M")
 
 	conn := &fasthttp.RequestCtx{}
@@ -115,12 +115,12 @@ func Test_Upstream_LoadLocal(t *testing.T) {
 		Body
 	assert.Equal(t, body, "sample1 content")
 
-	res, path = u.LoadLocal(EncodePath("does_not_exist"), nil)
+	res, path = u.LoadLocal(EncodePath("does_not_exist"), nil, false)
 	assert.Equal(t, path, "tests/up1_local/ZG/ZG9lc19ub3RfZXhpc3Q")
 	assert.Nil(t, res)
 }
 
-func Test_Upstream_CalculateExpired(t *testing.T) {
+func Test_Upstream_CalculateTTL(t *testing.T) {
 	createUpstream := func(defaultTTL uint32, ttls ...int) *Upstream {
 		lookup := make(map[int]int32, len(ttls)/2)
 		for i := 0; i < len(ttls); i += 2 {
@@ -142,28 +142,28 @@ func Test_Upstream_CalculateExpired(t *testing.T) {
 
 	u1 := createUpstream(399)
 	// uses default
-	assert.Equal(t, u1.calculateExpires(createResponse(200)), 399)
+	assert.Equal(t, u1.calculateTTL(createResponse(200)), 399)
 	// uses default
-	assert.Equal(t, u1.calculateExpires(createResponse(200)), 399)
+	assert.Equal(t, u1.calculateTTL(createResponse(200)), 399)
 	// uses header
-	assert.Equal(t, u1.calculateExpires(createResponse(200, "max-age=60")), 60)
+	assert.Equal(t, u1.calculateTTL(createResponse(200, "max-age=60")), 60)
 	// invalid header, uses default
-	assert.Equal(t, u1.calculateExpires(createResponse(200, "max-age=")), 399)
+	assert.Equal(t, u1.calculateTTL(createResponse(200, "max-age=")), 399)
 	// uses header
-	assert.Equal(t, u1.calculateExpires(createResponse(200, "public, max-age=3")), 3)
+	assert.Equal(t, u1.calculateTTL(createResponse(200, "public, max-age=3")), 3)
 
 	u2 := createUpstream(499, 200, 60, 404, -32)
 	// uses default
-	assert.Equal(t, u2.calculateExpires(createResponse(201)), 499)
+	assert.Equal(t, u2.calculateTTL(createResponse(201)), 499)
 	// uses header
-	assert.Equal(t, u2.calculateExpires(createResponse(200, "max-age=9")), 9)
+	assert.Equal(t, u2.calculateTTL(createResponse(200, "max-age=9")), 9)
 	// uses status-specific configuration
-	assert.Equal(t, u2.calculateExpires(createResponse(200)), 60)
+	assert.Equal(t, u2.calculateTTL(createResponse(200)), 60)
 	// uses status-specific configuration
-	assert.Equal(t, u2.calculateExpires(createResponse(404)), 32)
+	assert.Equal(t, u2.calculateTTL(createResponse(404)), 32)
 	// uses status-specific configuration (even with a cache-control header
 	// because it's set to a negative, which means "force")
-	assert.Equal(t, u2.calculateExpires(createResponse(404, "max-age=9")), 32)
+	assert.Equal(t, u2.calculateTTL(createResponse(404, "max-age=9")), 32)
 }
 
 func testUpstream1() *Upstream {
