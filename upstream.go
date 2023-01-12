@@ -1,10 +1,9 @@
 package assets
 
 import (
-	"encoding/gob"
 	"fmt"
 	"io"
-	"net/http"
+	gohttp "net/http"
 	"os"
 	"path"
 	"strings"
@@ -18,7 +17,7 @@ import (
 )
 
 type Upstream struct {
-	client *http.Client
+	client *gohttp.Client
 
 	// Upstream-specific counter for generating the RequestId
 	requestId uint32
@@ -37,6 +36,12 @@ type Upstream struct {
 	buffers *buffer.Pool
 
 	logField log.Field
+
+	// status_code => ttl
+	ttls map[int]int32
+
+	// used when ttls[status_code] doesn't exist
+	defaultTTL uint32
 }
 
 func NewUpstream(name string, config *upstreamConfig) (*Upstream, error) {
@@ -44,11 +49,29 @@ func NewUpstream(name string, config *upstreamConfig) (*Upstream, error) {
 	if err := os.MkdirAll(cacheRoot, 0700); err != nil {
 		return nil, fmt.Errorf("Failed to make upstream cache root (%s) - %w", cacheRoot, err)
 	}
+	defaultTTL := int32(300)
+	ttls := make(map[int]int32, len(config.Caching))
+	for _, caching := range config.Caching {
+		if caching.Status == 0 {
+			defaultTTL = caching.TTL
+		} else {
+			ttls[caching.Status] = caching.TTL
+		}
+	}
+
+	if defaultTTL < 0 {
+		defaultTTL *= -1
+	} else if defaultTTL == 0 {
+		defaultTTL = 60
+	}
 
 	return &Upstream{
-		baseURL:   config.BaseURL,
-		client:    &http.Client{},
-		cacheRoot: cacheRoot,
+		baseURL:    config.BaseURL,
+		client:     &gohttp.Client{},
+		cacheRoot:  cacheRoot,
+		defaultTTL: uint32(defaultTTL),
+		ttls:       ttls,
+
 		// If we let this start at 0, then restarts are likely to produce duplicates.
 		// While we make no guarantees about the uniqueness of the requestId, there's
 		// no reason we can't help things out a little.
@@ -78,24 +101,30 @@ func (u *Upstream) IsFileCached(cacheKey string, env *Env) (string, bool) {
 	return cachePath, false
 }
 
-func (u *Upstream) LoadLocal(encodedPath string, env *Env) (*Response, string) {
+func (u *Upstream) LoadLocal(encodedPath string, env *Env) (*LocalResponse, string) {
 	cachePath := u.CachePath(encodedPath)
 	f, err := os.Open(cachePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, cachePath
 		}
-		env.Error("Upstream.LoadLocal").String("path", cachePath).Err(err).Log()
+		env.Error("Upstream.LoadLocal.open").String("path", cachePath).Err(err).Log()
 		return nil, cachePath
 	}
-	defer f.Close()
 
-	var response *Response
-	if err := gob.NewDecoder(f).Decode(&response); err != nil {
-		env.Error("Upstream.LoadLocal.decode").String("path", cachePath).Err(err).Log()
+	res, err := NewLocalResponse(u, f)
+	if err != nil {
+		env.Error("Upstream.LoadLocal.read").String("path", cachePath).Err(err).Log()
 		return nil, cachePath
 	}
-	return response, cachePath
+
+	expires := int(res.expires)
+	if expires != 0 && int64(expires) < time.Now().Unix() {
+		res.Close()
+		return nil, cachePath
+	}
+
+	return res, cachePath
 }
 
 func (u *Upstream) CachePath(cacheKey string) string {
@@ -112,7 +141,7 @@ func (u *Upstream) CachePath(cacheKey string) string {
 	return b.String()
 }
 
-func (u *Upstream) GetSaveAndServe(remotePath string, local string, buf *buffer.Buffer, env *Env) (*Response, error) {
+func (u *Upstream) GetSaveAndServe(remotePath string, local string, env *Env) (*RemoteResponse, error) {
 	remoteURL := u.baseURL + remotePath
 	res, err := u.client.Get(remoteURL)
 	if err != nil {
@@ -125,24 +154,30 @@ func (u *Upstream) GetSaveAndServe(remotePath string, local string, buf *buffer.
 
 	bodyReader := res.Body
 	defer bodyReader.Close()
+
+	buf := u.buffers.Checkout()
 	_, err = io.Copy(buf, bodyReader)
 
 	if err != nil {
+		buf.Release()
 		return nil, fmt.Errorf("Upstream.SaveToPath copy - %w", err)
 	}
 
 	if err := buf.Error(); err != nil {
+		buf.Release()
 		return nil, fmt.Errorf("Upstream.SaveToPath buffer - %w", err)
 	}
 
-	response := NewResponse(buf, res, remotePath)
+	expires := u.calculateExpires(res)
+
+	response := NewRemoteResponse(res, buf, expires)
 	u.save(response, local, env)
 	return response, nil
 }
 
 // We log the error here, because some cases won't care about this error
 // and might just ignore it, but we still want to know about it
-func (u *Upstream) save(response *Response, local string, env *Env) error {
+func (u *Upstream) save(response *RemoteResponse, local string, env *Env) error {
 	flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	f, err := os.OpenFile(local, flag, 0600)
 	if err != nil {
@@ -155,10 +190,52 @@ func (u *Upstream) save(response *Response, local string, env *Env) error {
 		}
 	}
 	defer f.Close()
-
-	if err := gob.NewEncoder(f).Encode(response); err != nil {
-		env.Error("Upstream.Save.encode_response").Err(err).Log()
+	if err := response.Serialize(f); err != nil {
+		env.Error("Upstream.Save.serialize").Err(err).Log()
 		return err
 	}
 	return nil
+}
+
+func (u *Upstream) calculateExpires(res *gohttp.Response) uint32 {
+	status := res.StatusCode
+	ttl, exists := u.ttls[status]
+
+	if exists && ttl < 0 {
+		// we have a configured TTL for this status code and it's set to be "forced"
+		// (because of the negative value)
+		return uint32(-ttl)
+	}
+
+	// At this point, we may not have a configured TTL for this status code
+	// OR it could be configured to listen to the Cache-Control header if present
+	// so we need to figure out the max-age from the response header
+	cc := res.Header.Get("Cache-Control")
+
+	// we possibly have a max-age, we should use that if it's valid
+	if n := strings.Index(cc, "max-age="); n != -1 {
+		if ttl := atoi(cc[n+8:]); ttl > 0 {
+			return ttl
+		}
+	}
+
+	// no max age, then either use the configured TTL for the status code OR
+	// use the global
+	if exists {
+		return uint32(ttl)
+	}
+	return u.defaultTTL
+}
+
+// atoi that ignores any suffix (and overflow, but let's pretend we're ok with that)
+func atoi(input string) uint32 {
+	var n uint32
+	for _, b := range []byte(input) {
+		b -= '0'
+		if b > 9 {
+			break
+		}
+		n = n*10 + uint32(b)
+	}
+	return n
 }

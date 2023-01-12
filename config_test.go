@@ -35,7 +35,14 @@ func Test_Config_Minimal(t *testing.T) {
 	assert.True(t, strings.HasPrefix(Config.VipsVersion, "libvips "))
 
 	assert.Equal(t, len(Config.Upstreams), 1)
-	assert.Equal(t, Config.Upstreams["test"].BaseURL, "http://localhost:5400/x1")
+	up1 := Config.Upstreams["test"]
+	assert.Equal(t, up1.BaseURL, "http://localhost:5400/x1")
+
+	assert.Equal(t, len(up1.Caching), 2)
+	assert.Equal(t, up1.Caching[0].Status, 0)
+	assert.Equal(t, up1.Caching[0].TTL, 300)
+	assert.Equal(t, up1.Caching[1].Status, 200)
+	assert.Equal(t, up1.Caching[1].TTL, 3600)
 }
 
 func testConfigPath(file string) string {

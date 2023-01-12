@@ -6,6 +6,7 @@ import (
 
 	"src.goblgobl.com/tests/assert"
 	"src.goblgobl.com/tests/request"
+	"src.goblgobl.com/utils/log"
 )
 
 func Test_InfoHandler_Ok(t *testing.T) {
@@ -13,7 +14,7 @@ func Test_InfoHandler_Ok(t *testing.T) {
 	res, err := InfoHandler(conn)
 	assert.Nil(t, err)
 
-	res.Write(conn)
+	res.Write(conn, log.Noop{})
 	body := request.Res(t, conn).OK().JSON()
 	assert.Equal(t, body.String("commit"), commit)
 	assert.Equal(t, body.String("go"), runtime.Version())

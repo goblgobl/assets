@@ -27,23 +27,16 @@ func ServeHandler(conn *fasthttp.RequestCtx, env *Env) (http.Response, error) {
 func serveStatic(conn *fasthttp.RequestCtx, env *Env, path string, compress bool) (http.Response, error) {
 	upstream := env.upstream
 
-	response, cachePath := upstream.LoadLocal(EncodePath(path), env)
-	if response != nil {
-		response.CacheHit()
-		return response, nil
+	localRes, cachePath := upstream.LoadLocal(EncodePath(path), env)
+	if localRes != nil {
+		return localRes.Path(path), nil
 	}
 
-	buf := upstream.buffers.Checkout()
-	res, err := upstream.GetSaveAndServe(path, cachePath, buf, env)
+	remoteRes, err := upstream.GetSaveAndServe(path, cachePath, env)
 	if err != nil {
-		buf.Release()
 		return nil, err
 	}
-
-	// buf will be released as part of the response lifecycle. It has
-	// to exist as long as the response is needed since it holds the
-	// data
-	return res, nil
+	return remoteRes.Path(path), nil
 }
 
 func EncodePath(path string) string {

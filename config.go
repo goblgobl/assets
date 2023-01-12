@@ -10,7 +10,13 @@ import (
 	"src.goblgobl.com/utils/log"
 )
 
-var Config config
+var (
+	Config         config
+	DefaultCaching = []upstreamCacheConfig{
+		upstreamCacheConfig{Status: 0, TTL: 300},
+		upstreamCacheConfig{Status: 200, TTL: 3600},
+	}
+)
 
 type config struct {
 	InstanceId    uint8  `json:"instance_id"`
@@ -28,8 +34,14 @@ type httpConfig struct {
 }
 
 type upstreamConfig struct {
-	BaseURL string         `json:"base_url"`
-	Buffers *buffer.Config `json:"buffers"`
+	BaseURL string                `json:"base_url"`
+	Buffers *buffer.Config        `json:"buffers"`
+	Caching []upstreamCacheConfig `json:"caching"`
+}
+
+type upstreamCacheConfig struct {
+	Status int   `json:"status"`
+	TTL    int32 `json:"ttl"`
 }
 
 func Configure(filePath string) error {
@@ -81,6 +93,10 @@ func Configure(filePath string) error {
 				Min:   131072,  // 128KB,
 				Max:   1048576, // 1MB
 			}
+		}
+
+		if len(up.Caching) == 0 {
+			up.Caching = DefaultCaching
 		}
 	}
 

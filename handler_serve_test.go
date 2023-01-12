@@ -6,9 +6,11 @@ import (
 	"path"
 	"strings"
 	"testing"
+	"time"
 
 	"src.goblgobl.com/tests/assert"
 	"src.goblgobl.com/tests/request"
+	"src.goblgobl.com/utils/buffer"
 )
 
 const (
@@ -27,8 +29,7 @@ func Test_EncodePath(t *testing.T) {
 }
 
 func Test_ServeHandler_NotFound(t *testing.T) {
-	u := testUpstream2()
-	env := NewEnv(u)
+	env := NewEnv(testUpstream2())
 
 	res := request.ReqT(t, env).
 		UserValue("path", "not_exists").
@@ -37,7 +38,7 @@ func Test_ServeHandler_NotFound(t *testing.T) {
 	assert.True(t, strings.HasSuffix(res.Body, "</html>\r\n"))
 
 	// make sure we get this from the local file after our first fetch
-	wirteLocal(env, "not_exists", &Response{Body: []byte("nope"), Status: 404})
+	wirteLocal(env, "not_exists", &RemoteResponse{buffer: buffer.Containing([]byte("nope"), 0), status: 404})
 	res = request.ReqT(t, env).
 		UserValue("path", "not_exists").
 		Get(ServeHandler).
@@ -46,8 +47,7 @@ func Test_ServeHandler_NotFound(t *testing.T) {
 }
 
 func Test_ServeHandler_StaticAsset(t *testing.T) {
-	u := testUpstream2()
-	env := NewEnv(u)
+	env := NewEnv(testUpstream2())
 
 	res := request.ReqT(t, env).
 		UserValue("path", "folder/main.js").
@@ -67,7 +67,7 @@ func Test_ServeHandler_StaticAsset(t *testing.T) {
 	assert.Equal(t, res.Body, "alert(\"hi\")\n")
 
 	// make sure we get this from the local file
-	wirteLocal(env, "folder/main.js", &Response{Body: []byte("hello"), Status: 200})
+	wirteLocal(env, "folder/main.js", &RemoteResponse{buffer: buffer.Containing([]byte("hello"), 0), status: 200})
 	res = request.ReqT(t, env).
 		UserValue("path", "folder/main.js").
 		Get(ServeHandler).
@@ -75,10 +75,21 @@ func Test_ServeHandler_StaticAsset(t *testing.T) {
 	assert.Equal(t, res.Body, "hello")
 }
 
+func Test_ServerHandler_ExpiredLocal(t *testing.T) {
+	env := NewEnv(testUpstream2())
+
+	now := time.Now().Unix()
+	wirteLocal(env, "expired", &RemoteResponse{buffer: buffer.Containing([]byte("hello"), 0), status: 200, expires: uint32(now - 2)})
+	request.ReqT(t, env).
+		UserValue("path", "expired").
+		Get(ServeHandler).
+		ExpectNotFound()
+}
+
 // This is a bit lame, but we modify our local file, so that we can
 // assert that the file is being served from the local cache, and not
 // being re-fetched from the upstream
-func wirteLocal(env *Env, p string, res *Response) {
+func wirteLocal(env *Env, p string, res *RemoteResponse) {
 	u := env.upstream
 	p = EncodePath(p)
 	if err := u.save(res, u.CachePath(p), env); err != nil {
