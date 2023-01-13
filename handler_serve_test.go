@@ -84,6 +84,11 @@ func Test_ServerHandler_ExpiredLocal(t *testing.T) {
 		UserValue("path", "expired").
 		Get(ServeHandler).
 		ExpectNotFound()
+
+	// make sure it wrote the new version to our local cache
+	fullPath := env.upstream.CachePath(EncodePath("expired"))
+	data, _ := os.ReadFile(fullPath)
+	assert.StringContains(t, string(data), "404 Not Found")
 }
 
 // This is a bit lame, but we modify our local file, so that we can

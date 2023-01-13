@@ -131,6 +131,8 @@ func (u *Upstream) LoadLocal(encodedPath string, env *Env, force bool) (*LocalRe
 		expires := int(res.expires)
 		if expires != 0 && int64(expires) < time.Now().Unix() {
 			res.Close()
+			// no need to delete this file, because we expect our caller to go fetch
+			// it from the upstream and save the result, overwriting this
 			return nil, cachePath
 		}
 	}
