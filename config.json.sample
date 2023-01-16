@@ -4,7 +4,10 @@
   },
   "upstreams": {
     "google": {
-      "base_url": "https://www.google.com/images/branding/"
+      "base_url": "https://www.google.com/images/branding/",
+      "vips_transforms": {
+        "thumb_100": ["--size", "100x150"]
+      }
     }
   }
 }

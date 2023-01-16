@@ -34,9 +34,10 @@ type httpConfig struct {
 }
 
 type upstreamConfig struct {
-	BaseURL string                `json:"base_url"`
-	Buffers *buffer.Config        `json:"buffers"`
-	Caching []upstreamCacheConfig `json:"caching"`
+	BaseURL        string                `json:"base_url"`
+	Buffers        *buffer.Config        `json:"buffers"`
+	Caching        []upstreamCacheConfig `json:"caching"`
+	VipsTransforms map[string][]string   `json:"vips_transforms"`
 }
 
 type upstreamCacheConfig struct {

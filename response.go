@@ -18,14 +18,19 @@ import (
 var (
 	BIN_ENCODER                    = binary.LittleEndian
 	ErrInvalidResponseHeaderLength = errors.New("Serialized response header is invalid")
+	ErrInvalidResponseType         = errors.New("Serialized response is an unknown type")
 	ErrInvalidResponseVersion      = errors.New("Serialized response is an unsuported version")
 )
 
 type Response interface {
 	http.Response
-	Path(string)
+	PathLog(string)
 }
 
+// A response that's based on an net/http.Response from a GET to the upstream.
+// This is like a ProxyResponse, except it's designed not only to proxy the
+// request, but also serialize itself to disk (acting as a cache that can
+// then be loaded as a LocalResponse)
 type RemoteResponse struct {
 	path         string
 	buffer       *buffer.Buffer
@@ -47,7 +52,7 @@ func NewRemoteResponse(res *gohttp.Response, buf *buffer.Buffer, ttl uint32) *Re
 	}
 }
 
-func (r *RemoteResponse) Path(path string) {
+func (r *RemoteResponse) PathLog(path string) {
 	r.path = path
 }
 
@@ -86,18 +91,22 @@ func (r *RemoteResponse) Read(p []byte) (int, error) {
 }
 
 func (r *RemoteResponse) Serialize(w io.Writer) error {
-	var header [14]byte
+	var header [16]byte
 	body, _ := r.buffer.Bytes()
 
-	// version
-	//header[0] = 0
+	// magic number so we can tell this type of response apart from a raw image
+	header[0] = 1
 	header[1] = 1
 
-	BIN_ENCODER.PutUint32(header[2:], r.expires)
-	BIN_ENCODER.PutUint16(header[6:], uint16(r.status))
-	header[8] = byte(len(r.contentType))
-	header[9] = byte(len(r.cacheControl))
-	BIN_ENCODER.PutUint32(header[10:], uint32(len(body)))
+	// version
+	// header[2] = 0
+	header[3] = 1
+
+	BIN_ENCODER.PutUint32(header[4:], r.expires)
+	BIN_ENCODER.PutUint16(header[8:], uint16(r.status))
+	header[10] = byte(len(r.contentType))
+	header[11] = byte(len(r.cacheControl))
+	BIN_ENCODER.PutUint32(header[12:], uint32(len(body)))
 
 	if _, err := w.Write(header[:]); err != nil {
 		return err
@@ -114,25 +123,31 @@ func (r *RemoteResponse) Serialize(w io.Writer) error {
 	return err
 }
 
+// A response which is loaded from the local file system. Or a "cached" response
+// We expect most responses to be a LocalResponse, because we expect heavy caching.
 type LocalResponse struct {
 	path     string
 	expires  uint32
-	header   [14]byte
+	header   [16]byte
 	file     *os.File
 	upstream *Upstream
 }
 
 func NewLocalResponse(upstream *Upstream, file *os.File) (*LocalResponse, error) {
-	var header [14]byte
+	var header [16]byte
 	n, err := file.Read(header[:])
 	if err != nil {
 		return nil, err
 	}
-	if n != 14 {
+	if n != 16 {
 		return nil, ErrInvalidResponseHeaderLength
 	}
 
-	if header[0] != 0 || header[1] != 1 {
+	if header[0] != 1 || header[1] != 1 {
+		return nil, ErrInvalidResponseType
+	}
+
+	if header[2] != 0 || header[3] != 1 {
 		return nil, ErrInvalidResponseVersion
 	}
 
@@ -140,11 +155,11 @@ func NewLocalResponse(upstream *Upstream, file *os.File) (*LocalResponse, error)
 		file:     file,
 		header:   header,
 		upstream: upstream,
-		expires:  BIN_ENCODER.Uint32(header[2:]),
+		expires:  BIN_ENCODER.Uint32(header[4:]),
 	}, nil
 }
 
-func (r *LocalResponse) Path(path string) {
+func (r *LocalResponse) PathLog(path string) {
 	r.path = path
 }
 
@@ -152,12 +167,13 @@ func (r *LocalResponse) Write(conn *fasthttp.RequestCtx, logger log.Logger) log.
 	file := r.file
 	header := r.header
 
-	// we're already read the version (bytes 0, 1) and expiry (bytes 2, 3, 4, 5)
+	// we're already read the magic header (bytes 0, 1), version (bytes 2, 3)
+	// and expiry (bytes 4, 5, 6, 7)
 
-	status := int(BIN_ENCODER.Uint16(header[6:]))
-	contentTypeLength := header[8]
-	cacheControlLength := header[9]
-	bodyLength := int(BIN_ENCODER.Uint32(header[10:]))
+	status := int(BIN_ENCODER.Uint16(header[8:]))
+	contentTypeLength := header[10]
+	cacheControlLength := header[11]
+	bodyLength := int(BIN_ENCODER.Uint32(header[12:]))
 
 	conn.SetStatusCode(status)
 
@@ -202,5 +218,46 @@ func (r *LocalResponse) Close() error {
 }
 
 func (r *LocalResponse) Read(p []byte) (int, error) {
+	return r.file.Read(p)
+}
+
+// A response of an image off the file system
+type ImageResponse struct {
+	file *os.File
+}
+
+func NewImageResponse(file *os.File) ImageResponse {
+	return ImageResponse{file: file}
+}
+
+// func (r *ImageResponse) PathLog(path string) {
+// 	r.path = path
+// }
+
+func (r ImageResponse) Write(conn *fasthttp.RequestCtx, logger log.Logger) log.Logger {
+	stats, _ := r.file.Stat()
+	bodyLength := int(stats.Size())
+
+	conn.SetStatusCode(200)
+	// TODO: content type
+
+	// SetBodyStream will close the file
+	conn.SetBodyStream(r, bodyLength)
+
+	return logger.
+		Bool("hit", true).
+		// String("path", r.path).
+		Int("res", bodyLength).
+		Int("status", 200)
+}
+
+// Close will automatically be called when the response is written (this is
+// handled by fasthttp), but there might be cases where a LocalResponse is never
+// writen (like if we decide that it's invalid, such as when it's expired
+func (r ImageResponse) Close() error {
+	return r.file.Close()
+}
+
+func (r ImageResponse) Read(p []byte) (int, error) {
 	return r.file.Read(p)
 }
