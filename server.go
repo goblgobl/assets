@@ -2,9 +2,9 @@ package assets
 
 import (
 	_ "embed"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"src.goblgobl.com/utils"
 	"src.goblgobl.com/utils/http"
@@ -94,7 +94,7 @@ func AssetHandler(conn *fasthttp.RequestCtx, env *Env) (http.Response, error) {
 	remotePath := conn.UserValue("path").(string)
 	extension := filepath.Ext(remotePath)
 
-	switch extension {
+	switch strings.ToLower(extension) {
 	case ".png", ".jpg", ".gif", ".webp":
 		return serveImage(conn, env, remotePath, extension)
 	default:
@@ -103,87 +103,96 @@ func AssetHandler(conn *fasthttp.RequestCtx, env *Env) (http.Response, error) {
 }
 
 func serveImage(conn *fasthttp.RequestCtx, env *Env, remotePath string, extension string) (http.Response, error) {
+	upstream := env.upstream
+
 	query := conn.QueryArgs()
 	xform := query.Peek("xform")
-	if xform == nil {
-		// if we're not tranforming the image, we can treat it as a static asset
-		return serveStatic(conn, env, remotePath, extension)
+
+	var xformArgs []string
+	if xform != nil {
+		if xformArgs = upstream.vipsTransforms[utils.B2S(xform)]; xformArgs == nil {
+			return resInvalidXForm, nil
+		}
 	}
 
-	upstream := env.upstream
-	xformArgs, exists := upstream.vipsTransforms[utils.B2S(xform)]
-	if !exists {
-		return resInvalidXForm, nil
-	}
+	localMetaPath, localImagePath := upstream.LocalImagePath(remotePath, extension, xform)
 
-	// We have 2 layers of caching. The first is the transformed image, if we have
-	// that, great, we can send it off as is. If we don't, then maybe we have the
-	// origin image.
-
-	localOriginPath := upstream.LocalPath(remotePath, extension)
-
-	// TODO: optimize
-	localXFormPath := localOriginPath + "_" + string(xform) + extension
-
-	if res := upstream.LoadLocalImage(localXFormPath, env); res != nil {
-		// We have the transformed image locally stored already, yay, send it
+	if res := upstream.LoadLocalImage(localMetaPath, localImagePath, env); res != nil {
+		// We have a local response for this request. Hopefully it's the image
+		// that was asked for, but it could be anything else that the upstream
+		// returned previously that we've now cached (e.g. a 404)
 		return res, nil
 	}
 
-	res, exists, err := upstream.LocalImageCheck(localOriginPath, env)
+	if xform == nil {
+		// no tranform and from the previous failed LoadLocalImage, we know we
+		// don't have the image.
+		res, _, err := upstream.SaveOriginImage(remotePath, localMetaPath, localImagePath, env)
+		if res != nil || err != nil {
+			// As an optimization, SaveOriginImage will return the RemoteResponse or
+			// LocalResponse if the upstream returned a non-image, we can return that
+			// as is
+			return res, err
+		}
+		if res := upstream.LoadLocalImage(localMetaPath, localImagePath, env); res != nil {
+			return res, nil
+		}
+
+		return nil, log.StructuredError{
+			Err:  err,
+			Code: ERR_LOCAL_IMAGE_MISSING,
+			Data: map[string]any{
+				"remote": remotePath,
+				"local":  localImagePath,
+			},
+		}
+	}
+
+	originMetaPath, originImagePath := upstream.LocalImagePath(remotePath, extension, nil)
+	res, expires, err := upstream.OriginImageCheck(originMetaPath, env)
 	if res != nil || err != nil {
 		// We have a response or an error, return that.
-		// If we have a response, it's because we previously tried to load this image
+		// If we have a response, it's because we previously tried to load the origin
 		// and didn't get an image from the upstream, whatever we did get, we cached
 		// and will now return to the client.
 		return res, err
 	}
 
-	if !exists {
+	if expires == 0 {
 		// we don't have the origin, let's get it
-		res, err := upstream.SaveOriginImage(remotePath, localOriginPath, env)
+		res, ex, err := upstream.SaveOriginImage(remotePath, originMetaPath, originImagePath, env)
 		if res != nil || err != nil {
 			// We either got an error, or we got a non-image.
 			// If we got a non-image, then we'll return the response as though
 			// it's a static asset (this is likely a 404)
+
+			// TODO: do we want to store the origin res as a transform res?
 			return res, err
 		}
+		expires = ex
 	}
 
-	//TODO: optimize this (absolutely necessary!)
-	args := make([]string, len(xformArgs)+3)
-	args[0] = localOriginPath
-	args[1] = "-o"
-	args[2] = localXFormPath
-	for i := 0; i < len(xformArgs); i++ {
-		args[i+3] = xformArgs[i]
-	}
-
-	cmd := exec.Command(Config.VipsThumbnail, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
+	if err := upstream.TransformImage(originImagePath, localMetaPath, localImagePath, xformArgs, expires, env); err != nil {
 		return nil, log.StructuredError{
 			Err:  err,
 			Code: ERR_TRANSFORM,
 			Data: map[string]any{
 				"xform":  xform,
 				"remote": remotePath,
-				"stderr": string(out),
 			},
 		}
 	}
 
-	if res := upstream.LoadLocalImage(localXFormPath, env); res != nil {
+	if res := upstream.LoadLocalImage(localMetaPath, localImagePath, env); res != nil {
 		return res, nil
 	}
 
 	return nil, log.StructuredError{
 		Err:  err,
-		Code: ERR_TRANSFORM_MISSING,
+		Code: ERR_LOCAL_IMAGE_MISSING,
 		Data: map[string]any{
-			"xform":  xform,
 			"remote": remotePath,
-			"local":  localXFormPath,
+			"local":  localImagePath,
 		},
 	}
 }
@@ -191,17 +200,15 @@ func serveImage(conn *fasthttp.RequestCtx, env *Env, remotePath string, extensio
 func serveStatic(conn *fasthttp.RequestCtx, env *Env, remotePath string, extension string) (http.Response, error) {
 	upstream := env.upstream
 
-	localPath := upstream.LocalPath(remotePath, extension)
-	localRes := upstream.LoadLocalResponse(localPath, env, false)
-	if localRes != nil {
-		localRes.PathLog(remotePath)
-		return localRes, nil
+	localPath := upstream.LocalResPath(remotePath, extension)
+	lr := upstream.LoadLocalResponse(localPath, env, false)
+	if lr != nil {
+		return lr, nil
 	}
 
-	remoteRes, err := upstream.GetResponseAndSave(remotePath, localPath, env)
+	rr, err := upstream.GetResponseAndSave(remotePath, localPath, env)
 	if err != nil {
 		return nil, err
 	}
-	remoteRes.PathLog(remotePath)
-	return remoteRes, nil
+	return rr, nil
 }

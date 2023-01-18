@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	gohttp "net/http"
 
@@ -36,11 +37,7 @@ func Test_NewUpstream_NoDefaultCaching(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, up.baseURL, "https://src.goblgobl.com/assets/")
 
-	wd, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	assert.Equal(t, string(up.cacheRoot), wd+"/tests/up1_local/")
+	assert.Equal(t, string(up.cacheRoot), "tests/up1_local/")
 
 	// default TTL is set to 300
 	assert.Equal(t, up.defaultTTL, 300)
@@ -92,23 +89,29 @@ func Test_Upstream_NextRequestId(t *testing.T) {
 }
 
 func Test_Upstream_LocalPath(t *testing.T) {
-	u := &Upstream{cacheRoot: []byte("/tmp/x/")}
-	assert.Equal(t, u.LocalPath("hello_world", ".test"), "/tmp/x/aG/aGVsbG9fd29ybGQ.test")
+	u := &Upstream{cacheRoot: []byte("up1/cache/")}
+	assert.Equal(t, u.LocalResPath("hello_world", ".test"), "up1/cache/aG/aGVsbG9fd29ybGQ.test.res")
+	assert.Equal(t, u.LocalResPath("hello_world", ""), "up1/cache/aG/aGVsbG9fd29ybGQ.res")
+}
 
-	assert.Equal(t, u.LocalPath("hello_world", ""), "/tmp/x/aG/aGVsbG9fd29ybGQ")
+func Test_Upstream_LocalImagePath(t *testing.T) {
+	u := &Upstream{cacheRoot: []byte("up1/cache/")}
+	metaPath, imagePath := u.LocalImagePath("hello_world2", ".jpg", []byte("thumb100"))
+	assert.Equal(t, metaPath, "up1/cache/aG/aGVsbG9fd29ybGQy_thumb100.jpg.res")
+	assert.Equal(t, imagePath, "up1/cache/aG/aGVsbG9fd29ybGQy_thumb100.jpg")
 }
 
 func Test_Upstream_LoadLocalResponse(t *testing.T) {
 	u := testUpstream1()
 
-	writeLocalResponse(NewEnv(u), "sample1.css", &RemoteResponse{
-		buffer:       buffer.Containing([]byte("sample1 content"), 0),
-		status:       199,
-		contentType:  "assets/sample1",
-		cacheControl: "private;max-age=9",
-	})
+	rr := BuildRemoteResponse().
+		Body("sample1 content").
+		Status(199).
+		ContentType("assets/sample1").
+		CacheControl("private;max-age=9").
+		Response()
 
-	localPath := u.LocalPath("sample1.css", ".css")
+	localPath := writeLocal(NewEnv(u), "sample1.css", rr)
 	res := u.LoadLocalResponse(localPath, nil, false)
 
 	conn := &fasthttp.RequestCtx{}
@@ -120,7 +123,7 @@ func Test_Upstream_LoadLocalResponse(t *testing.T) {
 		Body
 	assert.Equal(t, body, "sample1 content")
 
-	localPath = u.LocalPath("does_not_exist", "")
+	localPath = u.LocalResPath("does_not_exist", "")
 	res = u.LoadLocalResponse(localPath, nil, false)
 	assert.Nil(t, res)
 }
@@ -171,66 +174,66 @@ func Test_Upstream_CalculateTTL(t *testing.T) {
 	assert.Equal(t, u2.calculateTTL(createResponse(404, "max-age=9")), 32)
 }
 
-func Test_Upstream_LocalImageCheck_DoesNotExist(t *testing.T) {
+func Test_Upstream_OriginImageCheck_DoesNotExist(t *testing.T) {
 	up := testUpstream2()
 	env := NewEnv(up)
 
-	localPath := up.LocalPath("does_not_exist", "")
-	res, exists, err := up.LocalImageCheck(localPath, env)
+	localPath := up.LocalResPath("does_not_exist", "")
+	res, expires, err := up.OriginImageCheck(localPath, env)
 	assert.Nil(t, res)
 	assert.Nil(t, err)
-	assert.False(t, exists)
+	assert.Equal(t, expires, 0)
 }
 
-func Test_Upstream_LocalImageCheck_HasNonImage(t *testing.T) {
+func Test_Upstream_OriginImageCheck_HasNonImage(t *testing.T) {
 	up := testUpstream2()
 	env := NewEnv(up)
 
-	writeLocalResponse(env, "has_local_non_image", &RemoteResponse{buffer: buffer.Containing([]byte(""), 0)})
-
-	localPath := up.LocalPath("has_local_non_image", "")
-	res, exists, err := up.LocalImageCheck(localPath, env)
+	rr := BuildRemoteResponse().Response()
+	localPath := writeLocal(env, "has_local_non_image", rr)
+	res, expires, err := up.OriginImageCheck(localPath, env)
 	assert.Nil(t, err)
 	assert.NotNil(t, res)
-	assert.False(t, exists)
+	assert.Equal(t, expires, 0)
 }
 
-func Test_Upstream_LocalImageCheck_HasImage(t *testing.T) {
+func Test_Upstream_OriginImageCheck_HasImage(t *testing.T) {
 	up := testUpstream2()
 	env := NewEnv(up)
 
-	writeLocalData(env, "has_local_image", []byte("any-non-response-will-do"))
-
-	localPath := up.LocalPath("has_local_image", "")
-	res, exists, err := up.LocalImageCheck(localPath, env)
+	rr := BuildRemoteResponse().Expires(100).Image().Response()
+	localPath := writeLocal(env, "has_local_image.png", rr)
+	res, expires, err := up.OriginImageCheck(localPath, env)
 	assert.Nil(t, err)
 	assert.Nil(t, res)
-	assert.True(t, exists)
+	assert.Equal(t, expires, uint32(time.Now().Unix()+100)) // need to fix this and add delta
 }
 
 func Test_Upstream_SaveOriginImage_Success(t *testing.T) {
 	up := testUpstream2()
 	remotePath := "docs/favicon.png"
-	localPath := up.LocalPath(remotePath, ".png")
+	metaPath, imagePath := up.LocalImagePath(remotePath, ".png", nil)
 
-	res, err := up.SaveOriginImage(remotePath, localPath, NewEnv(up))
+	res, expires, err := up.SaveOriginImage(remotePath, metaPath, imagePath, NewEnv(up))
 	assert.Nil(t, err)
 	assert.Nil(t, res)
+	assert.Delta(t, expires, uint32(time.Now().Unix()+604800)-1, 2)
 
-	assertFileHash(t, localPath, "2c859096f003dddb6b78787eae13e910d3b268d374299645ae14063c689be8a4")
+	assertFileHash(t, imagePath, "2c859096f003dddb6b78787eae13e910d3b268d374299645ae14063c689be8a4")
 }
 
 func Test_Upstream_SaveOriginImage_NotFound(t *testing.T) {
 	up := testUpstream2()
 	remotePath := "does_not_exist.png"
-	localPath := up.LocalPath(remotePath, ".png")
+	metaPath, imagePath := up.LocalImagePath(remotePath, ".png", nil)
 
-	res, err := up.SaveOriginImage(remotePath, localPath, NewEnv(up))
+	res, expires, err := up.SaveOriginImage(remotePath, metaPath, imagePath, NewEnv(up))
 	assert.Nil(t, err)
 	assert.NotNil(t, res)
+	assert.Equal(t, expires, 0)
 
 	// make sure the not found response is locally cached
-	local := up.LoadLocalResponse(localPath, nil, false)
+	local := up.LoadLocalResponse(metaPath, nil, false)
 
 	conn := &fasthttp.RequestCtx{}
 	local.Write(conn, log.Noop{})
@@ -277,22 +280,11 @@ func assertFileHash(t *testing.T, cachePath string, expected string) {
 // This is a bit lame, but we modify our local file, so that we can
 // assert that the file is being served from the local cache, and not
 // being re-fetched from the upstream
-func writeLocalResponse(env *Env, p string, res *RemoteResponse) {
+func writeLocal(env *Env, p string, res Serializable) string {
 	u := env.upstream
-	localPath := u.LocalPath(p, filepath.Ext(p))
-	if err := u.saveResponse(res, localPath, env); err != nil {
+	localPath := u.LocalResPath(p, filepath.Ext(p))
+	if err := u.save(res, localPath, env); err != nil {
 		panic(err)
 	}
-}
-
-func writeLocalData(env *Env, p string, data []byte) {
-	u := env.upstream
-	localPath := u.LocalPath(p, filepath.Ext(p))
-	f, err := openForWrite(localPath, env)
-	if err != nil {
-		panic(err)
-	}
-	if _, err := f.Write(data); err != nil {
-		panic(err)
-	}
+	return localPath
 }

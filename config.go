@@ -96,6 +96,10 @@ func Configure(filePath string) error {
 			}
 		}
 
+		if up.Buffers.Min < 255 {
+			up.Buffers.Min = 255
+		}
+
 		if len(up.Caching) == 0 {
 			up.Caching = DefaultCaching
 		}

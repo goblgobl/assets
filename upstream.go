@@ -7,8 +7,10 @@ import (
 	"io"
 	gohttp "net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -58,12 +60,7 @@ type Upstream struct {
 }
 
 func NewUpstream(name string, config *upstreamConfig) (*Upstream, error) {
-	cacheRoot, err := filepath.Abs(path.Join(Config.CacheRoot, name) + "/")
-	if err != nil {
-		return nil, fmt.Errorf("Failed to get absolute path (%s) - %w", Config.CacheRoot, err)
-	}
-	cacheRoot += "/"
-
+	cacheRoot := path.Join(Config.CacheRoot, name) + "/"
 	if err := os.MkdirAll(cacheRoot, 0700); err != nil {
 		return nil, fmt.Errorf("Failed to make upstream cache root (%s) - %w", cacheRoot, err)
 	}
@@ -118,79 +115,124 @@ func (u *Upstream) LoadLocalResponse(localPath string, env *Env, force bool) *Lo
 		return nil
 	}
 
-	res, err := NewLocalResponse(u, f)
+	lr, err := NewLocalResponse(u, f)
 	if err != nil {
+		f.Close()
 		env.Error("Upstream.LoadLocal.read").String("path", localPath).Err(err).Log()
 		return nil
 	}
 
 	// callers can opt to ignore the expiration
 	if !force {
-		expires := int(res.expires)
-		if expires != 0 && int64(expires) < time.Now().Unix() {
-			res.Close()
+		if int64(lr.meta.expires) < time.Now().Unix() {
+			lr.Close()
 			// no need to delete this file, because we expect our caller to go fetch
 			// it from the upstream and save the result, overwriting this
 			return nil
 		}
 	}
 
-	return res
+	return lr
 }
 
-func (u *Upstream) LoadLocalImage(localPath string, env *Env) http.Response {
-	f, err := os.Open(localPath)
+func (u *Upstream) LoadLocalImage(localMetaPath string, localImagePath string, env *Env) http.Response {
+	f, err := os.Open(localMetaPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			env.Error("Upstream.LoadLocalImage").String("path", localPath).Err(err).Log()
+			env.Error("Upstream.LoadLocalImage.Meta").String("path", localMetaPath).Err(err).Log()
 		}
 		return nil
 	}
 
-	return NewImageResponse(f)
+	// We have a local cache for this request...but things get complicated. Image
+	// responses are, annoyingly, stored across 2 files: one containing the metadata
+	// and one containing the actual image (this is necessary to easily interact
+	// with vipsthumbnail). All we have so far is the metadata, so we also need to
+	// setup the actual image. However, we might _only_ have metadata, say if
+	// this is a 404.
+
+	lr, err := NewLocalResponse(u, f)
+	if err != nil {
+		f.Close()
+		env.Error("Upstream.LoadLocalImage.NewLocalResponse").String("path", localMetaPath).Err(err).Log()
+		return nil
+	}
+
+	if lr.Type() == TYPE_GENERIC {
+		// this isn't an image, the entire response is contained here
+		return lr
+	}
+
+	// We have an image metadata file. We no longer need it (our lr has already
+	// parsed the header, which is all this file contains). We need to load
+	// the real image now.
+	f.Close()
+	f, err = os.Open(localImagePath)
+	if err != nil {
+		// this should not happen
+		env.Error("Upstream.LoadLocalImage.Image").String("path", localImagePath).Err(err).Log()
+		return nil
+	}
+	lr.file = f
+	return lr
 }
 
-// This function is a bit messy. Our caller wants to check if we have an
-// origin image locally cached. We might have it, in which case we'll return
-// exists == true to let it know the file exists.
-// But we might have a non-image locally cached instead. This would happen when
-// we previously tried to donwload the image and got a non-image response (we
-// cache negative responses too), in which case we'll returna  LocalResponse
-// so that the cached response can be sent to the client as-is, without any
-// additional image processing.
-func (u *Upstream) LocalImageCheck(localPath string, env *Env) (*LocalResponse, bool, error) {
-	f, err := os.Open(localPath)
+// Our caller wants to check if we have an origin image locally cached.
+// We might have it, in which case we'll return exists == true to let it know
+// the file exists. But we might have a non-image locally cached instead. This
+// would happen when we previously tried to donwload the image and got a
+// non-image response (we cache negative responses too), in which case we'll
+// returna  LocalResponse so that the cached response can be sent to the client
+// as-is, without any additional image processing.
+func (u *Upstream) OriginImageCheck(localMetaPath string, env *Env) (*LocalResponse, uint32, error) {
+	f, err := os.Open(localMetaPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, false, nil
+			return nil, 0, nil
 		}
-		return nil, false, err
+		return nil, 0, err
 	}
 	// f doesn't have to be closed if we have a LocalResponse, since the
 	// LocalResponse takes ownership of the file and will close it later.
 
 	lr, err := NewLocalResponse(u, f)
-	if err == nil {
-		// We have a valid LocalResponse. This means we've cached a non-image
-		// response (which we'll just want to return to the client as-is)
-		return lr, false, nil
+	if err != nil {
+		// this should not happen, let's pretend the file simply doesn't exist
+		env.Error("Upstream.OriginImageCheck").Err(err).String("path", localMetaPath).Log()
+		return nil, 0, nil
 	}
 
-	// We have a file and it doesn't appear to be a LocalResponse, we'll assume
-	// this is an image and signal so to our caller
-	f.Close()
-	return nil, true, nil
+	expires := lr.meta.expires
+	if int64(expires) < time.Now().Unix() {
+		lr.Close()
+		// our origin has expired
+		return nil, 0, nil
+	}
+
+	if lr.Type() == TYPE_GENERIC {
+		// This origin isn't an image, it's something else (a 404?), we should
+		// return this to our client
+		return lr, 0, nil
+	}
+
+	// We appear to have a valid origin image, there isn't anything we need from
+	// it at this point
+	lr.Close()
+
+	return nil, expires, nil
 }
 
-func (u *Upstream) LocalPath(remotePath string, extension string) string {
+func (u *Upstream) LocalResPath(remotePath string, extension string) string {
 	root := u.cacheRoot
 
 	// +3 for the subfolder that we'll use, which will be encodedPath[:2] + "/"
 	prefixLength := len(root) + 3
 	encodedLength := base64.RawURLEncoding.EncodedLen(len(remotePath))
 	filnameLength := prefixLength + encodedLength
+	fullLength := filnameLength + len(extension)
 
-	dst := make([]byte, filnameLength+len(extension))
+	// +4 for the .res  that we'll append
+	dst := make([]byte, fullLength+4)
 	copy(dst, root)
 
 	base64.RawURLEncoding.Encode(dst[prefixLength:], utils.S2B(remotePath))
@@ -204,14 +246,64 @@ func (u *Upstream) LocalPath(remotePath string, extension string) string {
 	dst[prefixLength-1] = '/'
 
 	copy(dst[filnameLength:], extension)
+	dst[fullLength] = '.'
+	dst[fullLength+1] = 'r'
+	dst[fullLength+2] = 'e'
+	dst[fullLength+3] = 's'
 
 	return utils.B2S(dst)
+}
+
+// originPath: up-name/AZ/AZ123.jpg.res
+// metaPath: up-name/AZ/AZ123_xform.jpg.res
+// imagePath: up-name/AZ/AZ123_xform.jpg
+// (xform can be nil)
+func (u *Upstream) LocalImagePath(remotePath string, extension string, xform []byte) (string, string) {
+	root := u.cacheRoot
+
+	// +3 for the subfolder that we'll use, which will be encodedPath[:2] + "/"
+	xformLength := len(xform)
+	if xformLength > 0 {
+		xformLength += 1
+	}
+	prefixLength := len(root) + 3
+	encodedLength := base64.RawURLEncoding.EncodedLen(len(remotePath))
+	filnameLength := prefixLength + encodedLength
+	fullLength := filnameLength + xformLength + len(extension)
+
+	// +4 for the .res  that we'll append
+	dst := make([]byte, fullLength+4)
+	copy(dst, root)
+
+	base64.RawURLEncoding.Encode(dst[prefixLength:], utils.S2B(remotePath))
+
+	// At this point, we have something like:
+	//   {r, o, o, t, /, 0, 0, 0, e, n, c, o, d, e, d}
+	// And we want to inject the 2 character, plus a slash, where the 0, 0, 0 is
+	//   {r, o, o, t, /, e, n, /, e, n, c, o, d, e, d}
+	dst[prefixLength-3] = dst[prefixLength]
+	dst[prefixLength-2] = dst[prefixLength+1]
+	dst[prefixLength-1] = '/'
+
+	if xformLength > 0 {
+		dst[filnameLength] = '_'
+		copy(dst[filnameLength+1:], xform)
+	}
+	copy(dst[filnameLength+xformLength:], extension)
+	dst[fullLength] = '.'
+	dst[fullLength+1] = 'r'
+	dst[fullLength+2] = 'e'
+	dst[fullLength+3] = 's'
+
+	metaPath := utils.B2S(dst)
+	// image path is the metaPath without the trailing .res
+	return metaPath, metaPath[:fullLength]
 }
 
 // Issues an http request to our upstream and saves the content locally.
 // The content is saved as our own Response object (serialized from a RemoteResponse
 // and loaded back into a LocalResponse)
-func (u *Upstream) GetResponseAndSave(remotePath string, localPath string, env *Env) (Response, error) {
+func (u *Upstream) GetResponseAndSave(remotePath string, localPath string, env *Env) (http.Response, error) {
 	owner := false
 
 	res, err, _ := u.sf.Do(remotePath, func() (any, error) {
@@ -226,7 +318,7 @@ func (u *Upstream) GetResponseAndSave(remotePath string, localPath string, env *
 			}
 		}
 
-		return u.createAndSaveRemoteResponse(res, localPath, env)
+		return u.createAndSaveRemoteResponse(res, localPath, TYPE_GENERIC, env)
 	})
 
 	if err != nil {
@@ -243,18 +335,15 @@ func (u *Upstream) GetResponseAndSave(remotePath string, localPath string, env *
 	// This cannot use the res.(*RemoteResponse) as our RemoteResponse cannot
 	// be shared across goroutines. Instead, at this point, we expect the file
 	// to be saved locally, so we can return a LocalResponse.
-	localRes := u.LoadLocalResponse(localPath, env, true)
-	if localRes == nil {
+	lr := u.LoadLocalResponse(localPath, env, true)
+	if lr == nil {
 		env.Error("Upstream.GetSaveAndServe.LoadLocal").String("remote", remotePath).Log()
 		return nil, errSingleflightLocalLoad
 	}
-	return localRes, nil
+	return lr, nil
 }
 
-// This doesn't deal with RemoteResponses (or LocalResponses) but rather the
-// raw body of the upstream response. This is necessary because we'll want to
-// do image transformation directly on these.
-func (u *Upstream) SaveOriginImage(remotePath string, localPath string, env *Env) (Response, error) {
+func (u *Upstream) SaveOriginImage(remotePath string, localMetaPath string, localImagePath string, env *Env) (http.Response, uint32, error) {
 	owner := false
 
 	res, err, _ := u.sf.Do(remotePath, func() (any, error) {
@@ -270,29 +359,44 @@ func (u *Upstream) SaveOriginImage(remotePath string, localPath string, env *Env
 		}
 
 		if res.StatusCode != 200 {
-			return u.createAndSaveRemoteResponse(res, localPath, env)
+			return u.createAndSaveRemoteResponse(res, localMetaPath, TYPE_GENERIC, env)
 		}
 
-		f, err := openForWrite(localPath, env)
+		body := res.Body
+		defer body.Close()
+
+		f, err := openForWrite(localImagePath, env)
 		if err != nil {
 			return nil, err
 		}
-		body := res.Body
-		defer body.Close()
-		_, err = io.Copy(f, body)
-		return nil, err
+		defer f.Close()
+
+		bodyLength, err := io.Copy(f, body)
+		if err != nil {
+			os.Remove(localImagePath)
+			return nil, err
+		}
+
+		ttl := u.calculateTTL(res)
+		meta := MetaFromResponse(res, ttl, TYPE_IMAGE, uint32(bodyLength))
+		if err := u.save(meta, localMetaPath, env); err != nil {
+			os.Remove(localImagePath)
+			return nil, err
+		}
+
+		return meta.expires, err
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	if res == nil {
-		// This is the case that we want. No error. No response. No response because
-		// we detected an image and saved it locally, which is what this function
-		// is supposed to do (we're not returning our image as a response because,
-		// presumably our caller wants to apply some transformations to it)
-		return nil, nil
+	if expires, ok := res.(uint32); ok {
+		// This is the case that we want: the expiration time of the origin. This
+		// means we _did_ get an origin image and successfully saved it. We don't
+		// want the full response/image because our caller wants to transform it
+		// (hence it just wants it on disk)
+		return nil, expires, nil
 	}
 
 	// Ideally, we shouldn't be here. We're only here because our above closure
@@ -304,22 +408,84 @@ func (u *Upstream) SaveOriginImage(remotePath string, localPath string, env *Env
 	// This is the goroutine that actually executed the HTTP request to the upstream
 	// and thus we designate it as the owner of the response
 	if owner {
-		return res.(*RemoteResponse), nil
+		return res.(*RemoteResponse), 0, nil
 	}
 
 	// This was one of the goroutines that was blocked on the singleflight.
 	// This cannot use the res.(*RemoteResponse) as our RemoteResponse cannot
 	// be shared across goroutines. Instead, at this point, we expect the file
 	// to be saved locally, so we can return a LocalResponse.
-	localRes := u.LoadLocalResponse(localPath, env, true)
-	if localRes == nil {
+	lr := u.LoadLocalResponse(localMetaPath, env, true)
+	if lr == nil {
 		env.Error("Upstream.GetSaveAndServe.LoadLocal").String("remote", remotePath).Log()
-		return nil, errSingleflightLocalLoad
+		return nil, 0, errSingleflightLocalLoad
 	}
-	return localRes, nil
+	return lr, 0, nil
 }
 
-func (u *Upstream) createAndSaveRemoteResponse(res *gohttp.Response, localPath string, env *Env) (*RemoteResponse, error) {
+func (u *Upstream) TransformImage(originImagePath string, localMetaPath string, localImagePath string, xformArgs []string, expires uint32, env *Env) error {
+	// TODO: optimize this (fewer allocs, singleflight, ...)
+	args := make([]string, len(xformArgs)+3)
+	args[0] = originImagePath
+	args[1] = "-o"
+
+	// vipsthumbnails wants a relative path to the origin
+	// (it can take an absolute path too, but we support both absolute and
+	// relative, so better to just give it the relative path)
+	args[2] = path.Base(localImagePath)
+	for i := 0; i < len(xformArgs); i++ {
+		args[i+3] = xformArgs[i]
+	}
+
+	cmd := exec.Command(Config.VipsThumbnail, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s - %w", string(out), err)
+	}
+
+	contentType := ""
+	ext := strings.ToLower(filepath.Ext(localImagePath))
+
+	switch ext {
+	case ".png":
+		contentType = "image/png"
+	case ".webp":
+		contentType = "image/webp"
+	case ".jpg", ".jpeg":
+		contentType = "image/jpeg"
+	case ".gif":
+		contentType = "image/gif"
+	default:
+		env.Error("TransformImage.extension").String("ext", ext).Log()
+	}
+
+	fi, err := os.Stat(localImagePath)
+	if err != nil {
+		os.Remove(localImagePath) // no point keeping this around if we can't figure it's size
+		return log.StructuredError{
+			Err:  err,
+			Code: ERR_FS_STAT,
+			Data: map[string]any{"path": localImagePath},
+		}
+	}
+
+	meta := &Meta{
+		tpe:          TYPE_IMAGE,
+		status:       200,
+		contentType:  contentType,
+		cacheControl: "public,max-age=" + strconv.Itoa(int(expires)), // TODO, this is an absolute value, it should be a TTL, duh
+		expires:      expires,
+		bodyLength:   uint32(fi.Size()),
+	}
+
+	if err := u.save(meta, localMetaPath, env); err != nil {
+		os.Remove(localImagePath) // no point keeping this around without a meta file
+		return err
+	}
+	return nil
+}
+
+func (u *Upstream) createAndSaveRemoteResponse(res *gohttp.Response, localPath string, tpe byte, env *Env) (*RemoteResponse, error) {
 	body := res.Body
 	defer body.Close()
 
@@ -328,33 +494,33 @@ func (u *Upstream) createAndSaveRemoteResponse(res *gohttp.Response, localPath s
 
 	if err != nil {
 		buf.Release()
-		env.Error("Upstream.CreateAndSaveRemoteResponse.Copy").Err(err).Log()
+		env.Error("Upstream.createAndSaveRemoteResponse.Copy").Err(err).Log()
 		return nil, err
 	}
 
 	if err := buf.Error(); err != nil {
 		buf.Release()
-		env.Error("Upstream.CreateAndSaveRemoteResponse.Buffer").Err(err).Log()
+		env.Error("Upstream.createAndSaveRemoteResponse.Buffer").Err(err).Log()
 		return nil, err
 	}
 
 	ttl := u.calculateTTL(res)
-	response := NewRemoteResponse(res, buf, ttl)
-	u.saveResponse(response, localPath, env)
-	return response, nil
+	rr := NewRemoteResponse(res, buf, ttl, tpe)
+	u.save(rr, localPath, env)
+	return rr, nil
 }
 
 // We log the error here, because some cases won't care about this error
 // and might just ignore it, but we still want to know about it
-func (u *Upstream) saveResponse(response *RemoteResponse, localPath string, env *Env) error {
+func (u *Upstream) save(s Serializable, localPath string, env *Env) error {
 	f, err := openForWrite(localPath, env)
 	if err != nil {
 		return err
 	}
 
 	defer f.Close()
-	if err := response.Serialize(f); err != nil {
-		env.Error("Upstream.SaveResponse").String("path", localPath).Err(err).Log()
+	if err := s.Serialize(f); err != nil {
+		env.Error("Upstream.saveMeta").String("path", localPath).Err(err).Log()
 		return err
 	}
 	return nil

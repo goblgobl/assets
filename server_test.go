@@ -5,13 +5,10 @@ import (
 	"os"
 	"path"
 	"runtime"
-	"strings"
 	"testing"
-	"time"
 
 	"src.goblgobl.com/tests/assert"
 	"src.goblgobl.com/tests/request"
-	"src.goblgobl.com/utils/buffer"
 	"src.goblgobl.com/utils/log"
 )
 
@@ -93,10 +90,10 @@ func Test_AssetHandler_NotFound(t *testing.T) {
 		UserValue("path", "not_exists").
 		Get(AssetHandler).
 		ExpectNotFound()
-	assert.True(t, strings.HasSuffix(res.Body, "</html>\r\n"))
+	assert.StringContains(t, res.Body, "openresty")
 
 	// make sure we get this from the local file after our first fetch
-	writeLocalResponse(env, "not_exists", &RemoteResponse{buffer: buffer.Containing([]byte("nope"), 0), status: 404})
+	writeLocal(env, "not_exists", BuildRemoteResponse().Body("nope").Status(404).Response())
 	res = request.ReqT(t, env).
 		UserValue("path", "not_exists").
 		Get(AssetHandler).
@@ -125,7 +122,7 @@ func Test_AssetHandler_StaticAsset(t *testing.T) {
 	assert.Equal(t, res.Body, "alert(\"hi\")\n")
 
 	// make sure we get this from the local file
-	writeLocalResponse(env, "folder/main.js", &RemoteResponse{buffer: buffer.Containing([]byte("hello"), 0), status: 200})
+	writeLocal(env, "folder/main.js", BuildRemoteResponse().Body("hello").Status(200).Response())
 	res = request.ReqT(t, env).
 		UserValue("path", "folder/main.js").
 		Get(AssetHandler).
@@ -136,15 +133,14 @@ func Test_AssetHandler_StaticAsset(t *testing.T) {
 func Test_ServerHandler_ExpiredLocal(t *testing.T) {
 	env := NewEnv(testUpstream2())
 
-	now := time.Now().Unix()
-	writeLocalResponse(env, "expired", &RemoteResponse{buffer: buffer.Containing([]byte("hello"), 0), status: 200, expires: uint32(now - 2)})
+	rr := BuildRemoteResponse().Body("hello").Status(200).Expires(-2).Response()
+	localPath := writeLocal(env, "expired", rr)
 	request.ReqT(t, env).
 		UserValue("path", "expired").
 		Get(AssetHandler).
 		ExpectNotFound()
 
 	// make sure it wrote the new version to our local cache
-	localPath := env.upstream.LocalPath("expired", "")
 	data, _ := os.ReadFile(localPath)
 	assert.StringContains(t, string(data), "404 Not Found")
 }

@@ -11,20 +11,133 @@ import (
 	"github.com/valyala/fasthttp"
 	"src.goblgobl.com/utils"
 	"src.goblgobl.com/utils/buffer"
-	"src.goblgobl.com/utils/http"
 	"src.goblgobl.com/utils/log"
 )
 
-var (
-	BIN_ENCODER                    = binary.LittleEndian
-	ErrInvalidResponseHeaderLength = errors.New("Serialized response header is invalid")
-	ErrInvalidResponseType         = errors.New("Serialized response is an unknown type")
-	ErrInvalidResponseVersion      = errors.New("Serialized response is an unsuported version")
+const (
+	TYPE_GENERIC byte = 0
+	TYPE_IMAGE        = 1
 )
 
-type Response interface {
-	http.Response
-	PathLog(string)
+var (
+	ErrInvalidResponseHeaderLength = errors.New("serialized response header is invalid")
+	ErrInvalidResponseType         = errors.New("serialized response is an unknown type")
+	ErrInvalidResponseVersion      = errors.New("serialized response is an unsuported version")
+	BIN_ENCODER                    = binary.LittleEndian
+)
+
+type Serializable interface {
+	Serialize(w io.Writer) error
+}
+
+type Meta struct {
+	tpe          byte
+	status       uint16
+	contentType  string
+	cacheControl string
+	expires      uint32
+	bodyLength   uint32
+}
+
+// Don't rely on res.ContentLength for the bodyLength, it isn't reliable.
+// (It can be unknown (aka 0) to the gohttp.Response). Let our caller
+// give us the length explicitly (it probably read the body)
+func MetaFromResponse(res *gohttp.Response, ttl uint32, tpe byte, bodyLength uint32) *Meta {
+	h := res.Header
+	expires := uint32(time.Now().Add(time.Duration(ttl) * time.Second).Unix())
+	return &Meta{
+		tpe:          tpe,
+		expires:      expires,
+		bodyLength:   bodyLength,
+		status:       uint16(res.StatusCode),
+		contentType:  h.Get("Content-Type"),
+		cacheControl: h.Get("Cache-Control"),
+	}
+}
+
+func MetaFromReader(upstream *Upstream, r io.Reader) (*Meta, error) {
+	var header [17]byte
+	n, err := r.Read(header[:])
+	if err != nil {
+		return nil, err
+	}
+
+	if n != 17 {
+		return nil, ErrInvalidResponseHeaderLength
+	}
+
+	if header[0] != 1 || header[1] != 1 {
+		return nil, ErrInvalidResponseType
+	}
+
+	if header[2] != 0 || header[3] != 1 {
+		return nil, ErrInvalidResponseVersion
+	}
+
+	contentTypeLength := header[11]
+	cacheControlLength := header[12]
+	var contentType, cacheControl string
+
+	if contentTypeLength > 0 || cacheControlLength > 0 {
+		buffer := upstream.buffers.Checkout()
+		defer buffer.Release()
+		// this should not be able to fail, since our config enforces buffers are
+		// configured with at least 255 bytes
+		scrap, _ := buffer.TakeBytes(255)
+
+		if contentTypeLength > 0 {
+			ct := scrap[:contentTypeLength]
+			if n, _ := r.Read(ct); n > 0 {
+				contentType = string(ct)
+			}
+		}
+		if cacheControlLength > 0 {
+			cc := scrap[:cacheControlLength]
+			if n, _ := r.Read(cc); n > 0 {
+				cacheControl = string(cc)
+			}
+		}
+	}
+
+	return &Meta{
+		tpe:          header[4],
+		expires:      BIN_ENCODER.Uint32(header[5:]),
+		status:       BIN_ENCODER.Uint16(header[9:]),
+		contentType:  contentType,
+		cacheControl: cacheControl,
+		bodyLength:   BIN_ENCODER.Uint32(header[13:]),
+	}, nil
+}
+
+func (m *Meta) Serialize(w io.Writer) error {
+	var header [17]byte
+
+	// magic number so we can tell this type of response apart from a raw image
+	header[0] = 1
+	header[1] = 1
+
+	// version
+	// header[2] = 0
+	header[3] = 1
+	header[4] = m.tpe
+
+	BIN_ENCODER.PutUint32(header[5:], m.expires)
+	BIN_ENCODER.PutUint16(header[9:], m.status)
+	header[11] = byte(len(m.contentType))
+	header[12] = byte(len(m.cacheControl))
+	BIN_ENCODER.PutUint32(header[13:], m.bodyLength)
+
+	if _, err := w.Write(header[:]); err != nil {
+		return err
+	}
+
+	if _, err := w.Write(utils.S2B(m.contentType)); err != nil {
+		return err
+	}
+	if _, err := w.Write(utils.S2B(m.cacheControl)); err != nil {
+		return err
+	}
+	return nil
 }
 
 // A response that's based on an net/http.Response from a GET to the upstream.
@@ -32,41 +145,30 @@ type Response interface {
 // request, but also serialize itself to disk (acting as a cache that can
 // then be loaded as a LocalResponse)
 type RemoteResponse struct {
-	path         string
-	buffer       *buffer.Buffer
-	status       int
-	contentType  string
-	cacheControl string
-	expires      uint32
+	meta   *Meta
+	path   string
+	buffer *buffer.Buffer
 }
 
-func NewRemoteResponse(res *gohttp.Response, buf *buffer.Buffer, ttl uint32) *RemoteResponse {
-	h := res.Header
-	expires := uint32(time.Now().Add(time.Duration(ttl) * time.Second).Unix())
+func NewRemoteResponse(res *gohttp.Response, buf *buffer.Buffer, ttl uint32, tpe byte) *RemoteResponse {
 	return &RemoteResponse{
-		buffer:       buf,
-		expires:      expires,
-		status:       res.StatusCode,
-		contentType:  h.Get("Content-Type"),
-		cacheControl: h.Get("Cache-Control"),
+		buffer: buf,
+		meta:   MetaFromResponse(res, ttl, tpe, uint32(buf.Len())),
 	}
 }
 
-func (r *RemoteResponse) PathLog(path string) {
-	r.path = path
-}
-
 func (r *RemoteResponse) Write(conn *fasthttp.RequestCtx, logger log.Logger) log.Logger {
-	status := r.status
-	bodyLength := r.buffer.Len()
+	meta := r.meta
+	status := int(meta.status)
+	bodyLength := int(meta.bodyLength)
 
 	conn.SetStatusCode(status)
 
 	header := &conn.Response.Header
-	if ct := r.contentType; ct != "" {
+	if ct := meta.contentType; ct != "" {
 		header.SetContentType(ct)
 	}
-	if cc := r.cacheControl; cc != "" {
+	if cc := meta.cacheControl; cc != "" {
 		header.SetBytesK([]byte("Cache-Control"), cc)
 	}
 
@@ -91,34 +193,10 @@ func (r *RemoteResponse) Read(p []byte) (int, error) {
 }
 
 func (r *RemoteResponse) Serialize(w io.Writer) error {
-	var header [16]byte
+	if err := r.meta.Serialize(w); err != nil {
+		return err
+	}
 	body, _ := r.buffer.Bytes()
-
-	// magic number so we can tell this type of response apart from a raw image
-	header[0] = 1
-	header[1] = 1
-
-	// version
-	// header[2] = 0
-	header[3] = 1
-
-	BIN_ENCODER.PutUint32(header[4:], r.expires)
-	BIN_ENCODER.PutUint16(header[8:], uint16(r.status))
-	header[10] = byte(len(r.contentType))
-	header[11] = byte(len(r.cacheControl))
-	BIN_ENCODER.PutUint32(header[12:], uint32(len(body)))
-
-	if _, err := w.Write(header[:]); err != nil {
-		return err
-	}
-
-	if _, err := w.Write(utils.S2B(r.contentType)); err != nil {
-		return err
-	}
-	if _, err := w.Write(utils.S2B(r.cacheControl)); err != nil {
-		return err
-	}
-
 	_, err := w.Write(body)
 	return err
 }
@@ -127,77 +205,40 @@ func (r *RemoteResponse) Serialize(w io.Writer) error {
 // We expect most responses to be a LocalResponse, because we expect heavy caching.
 type LocalResponse struct {
 	path     string
-	expires  uint32
-	header   [16]byte
+	meta     *Meta
 	file     *os.File
 	upstream *Upstream
 }
 
 func NewLocalResponse(upstream *Upstream, file *os.File) (*LocalResponse, error) {
-	var header [16]byte
-	n, err := file.Read(header[:])
+	meta, err := MetaFromReader(upstream, file)
 	if err != nil {
 		return nil, err
-	}
-	if n != 16 {
-		return nil, ErrInvalidResponseHeaderLength
-	}
-
-	if header[0] != 1 || header[1] != 1 {
-		return nil, ErrInvalidResponseType
-	}
-
-	if header[2] != 0 || header[3] != 1 {
-		return nil, ErrInvalidResponseVersion
 	}
 
 	return &LocalResponse{
 		file:     file,
-		header:   header,
+		meta:     meta,
 		upstream: upstream,
-		expires:  BIN_ENCODER.Uint32(header[4:]),
 	}, nil
 }
 
-func (r *LocalResponse) PathLog(path string) {
-	r.path = path
+func (r *LocalResponse) Type() byte {
+	return r.meta.tpe
 }
 
 func (r *LocalResponse) Write(conn *fasthttp.RequestCtx, logger log.Logger) log.Logger {
-	file := r.file
-	header := r.header
-
-	// we're already read the magic header (bytes 0, 1), version (bytes 2, 3)
-	// and expiry (bytes 4, 5, 6, 7)
-
-	status := int(BIN_ENCODER.Uint16(header[8:]))
-	contentTypeLength := header[10]
-	cacheControlLength := header[11]
-	bodyLength := int(BIN_ENCODER.Uint32(header[12:]))
+	meta := r.meta
+	status := int(meta.status)
+	bodyLength := int(meta.bodyLength)
 
 	conn.SetStatusCode(status)
-
-	if contentTypeLength > 0 || cacheControlLength > 0 {
-		buffer := r.upstream.buffers.Checkout()
-		defer buffer.Release()
-		// this should not be able to fail, since our config enforces buffers are
-		// configured with at least 255 bytes
-		scrap, _ := buffer.TakeBytes(255)
-
-		header := &conn.Response.Header
-
-		if contentTypeLength > 0 {
-			ct := scrap[:contentTypeLength]
-			if n, _ := file.Read(ct); n > 0 {
-				header.SetContentTypeBytes(ct)
-			}
-		}
-		if cacheControlLength > 0 {
-			cc := scrap[:cacheControlLength]
-			if n, _ := file.Read(cc); n > 0 {
-				header.SetBytesKV([]byte("Cache-Control"), cc)
-			}
-		}
+	header := &conn.Response.Header
+	if ct := meta.contentType; ct != "" {
+		header.SetContentType(ct)
+	}
+	if cc := meta.cacheControl; cc != "" {
+		header.SetBytesK([]byte("Cache-Control"), cc)
 	}
 
 	// SetBodyStream will close the file
