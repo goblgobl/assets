@@ -65,15 +65,15 @@ func Test_LoadEnv_Invalid_Up(t *testing.T) {
 }
 
 func Test_LoadEnv_Ok(t *testing.T) {
-	up1 := testUpstream1()
-	Upstreams = map[string]*Upstream{up1.name: testUpstream1()}
+	up2 := testUpstream2()
+	Upstreams = map[string]*Upstream{up2.name: up2}
 
-	conn := request.Req(t).Query("up", up1.name).Conn()
+	conn := request.Req(t).Query("up", up2.name).Conn()
 	env, res, err := loadEnv(conn)
 	assert.Nil(t, res)
 	assert.Nil(t, err)
 
-	assert.Equal(t, env.upstream.name, up1.name)
+	assert.Equal(t, env.upstream.name, up2.name)
 }
 
 func init() {

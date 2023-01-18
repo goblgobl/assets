@@ -22,7 +22,7 @@ func init() {
 }
 
 func Test_NewUpstream_NoDefaultCaching(t *testing.T) {
-	up, err := NewUpstream("up1_local", &upstreamConfig{
+	up, err := NewUpstream("up2_local", &upstreamConfig{
 		BaseURL: "https://src.goblgobl.com/assets/",
 		Buffers: &buffer.Config{
 			Count: 2,
@@ -37,7 +37,7 @@ func Test_NewUpstream_NoDefaultCaching(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, up.baseURL, "https://src.goblgobl.com/assets/")
 
-	assert.Equal(t, string(up.cacheRoot), "tests/up1_local/")
+	assert.Equal(t, string(up.cacheRoot), "tests/up2_local/")
 
 	// default TTL is set to 300
 	assert.Equal(t, up.defaultTTL, 300)
@@ -50,7 +50,7 @@ func Test_NewUpstream_NoDefaultCaching(t *testing.T) {
 }
 
 func Test_NewUpstream_WithDefaultCaching(t *testing.T) {
-	up, err := NewUpstream("up1_local", &upstreamConfig{
+	up, err := NewUpstream("up2_local", &upstreamConfig{
 		BaseURL: "https://src.goblgobl.com/assets/",
 		Buffers: &buffer.Config{},
 		Caching: []upstreamCacheConfig{
@@ -102,7 +102,7 @@ func Test_Upstream_LocalImagePath(t *testing.T) {
 }
 
 func Test_Upstream_LoadLocalResponse(t *testing.T) {
-	u := testUpstream1()
+	u := testUpstream2()
 
 	rr := BuildRemoteResponse().
 		Body("sample1 content").
@@ -239,10 +239,6 @@ func Test_Upstream_SaveOriginImage_NotFound(t *testing.T) {
 	local.Write(conn, log.Noop{})
 	body := request.Res(t, conn).ExpectNotFound().Body
 	assert.StringContains(t, body, "404 Not Found")
-}
-
-func testUpstream1() *Upstream {
-	return testUpstream("up1_local")
 }
 
 func testUpstream2() *Upstream {
