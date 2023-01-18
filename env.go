@@ -10,6 +10,8 @@ type Env struct {
 	// Anything logged with this logger will automatically have the rid
 	// (request id) field
 	logger log.Logger
+
+	requestLogger log.Logger
 }
 
 func NewEnv(upstream *Upstream) *Env {
@@ -48,7 +50,9 @@ func (e *Env) Fatal(ctx string) log.Logger {
 }
 
 func (e *Env) Request(route string) log.Logger {
-	return e.logger.Request(route)
+	logger := e.logger.Request(route)
+	e.requestLogger = logger
+	return logger
 }
 
 func (e *Env) Release() {

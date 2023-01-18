@@ -135,7 +135,7 @@ func (u *Upstream) LoadLocalResponse(localPath string, env *Env, force bool) *Lo
 	return lr
 }
 
-func (u *Upstream) LoadLocalImage(localMetaPath string, localImagePath string, env *Env) http.Response {
+func (u *Upstream) LoadLocalImage(localMetaPath string, localImagePath string, env *Env) *LocalResponse {
 	f, err := os.Open(localMetaPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -192,9 +192,12 @@ func (u *Upstream) OriginImageCheck(localMetaPath string, env *Env) (*LocalRespo
 		}
 		return nil, 0, err
 	}
-	// f doesn't have to be closed if we have a LocalResponse, since the
-	// LocalResponse takes ownership of the file and will close it later.
 
+	// TODO: NewLocalResponse reads more from the file than we strictly need
+	// here. Specifically, it reads/allocates both the content-type and cache-control
+	// header, which we don't need here.
+
+	// lr owns f
 	lr, err := NewLocalResponse(u, f)
 	if err != nil {
 		// this should not happen, let's pretend the file simply doesn't exist
@@ -311,11 +314,7 @@ func (u *Upstream) GetResponseAndSave(remotePath string, localPath string, env *
 		remoteURL := u.baseURL + remotePath
 		res, err := u.client.Get(remoteURL)
 		if err != nil {
-			return nil, log.StructuredError{
-				Err:  err,
-				Code: ERR_PROXY,
-				Data: map[string]any{"url": remoteURL},
-			}
+			return nil, log.ErrData(ERR_PROXY, err, map[string]any{"url": remoteURL})
 		}
 
 		return u.createAndSaveRemoteResponse(res, localPath, TYPE_GENERIC, env)
@@ -351,14 +350,10 @@ func (u *Upstream) SaveOriginImage(remotePath string, localMetaPath string, loca
 		remoteURL := u.baseURL + remotePath
 		res, err := u.client.Get(remoteURL)
 		if err != nil {
-			return nil, log.StructuredError{
-				Err:  err,
-				Code: ERR_PROXY,
-				Data: map[string]any{"url": remoteURL},
-			}
+			return nil, log.ErrData(ERR_PROXY, err, map[string]any{"url": remoteURL})
 		}
 
-		if res.StatusCode != 200 {
+		if res.StatusCode != 200 || !isImage(res) {
 			return u.createAndSaveRemoteResponse(res, localMetaPath, TYPE_GENERIC, env)
 		}
 
@@ -462,20 +457,16 @@ func (u *Upstream) TransformImage(originImagePath string, localMetaPath string, 
 	fi, err := os.Stat(localImagePath)
 	if err != nil {
 		os.Remove(localImagePath) // no point keeping this around if we can't figure it's size
-		return log.StructuredError{
-			Err:  err,
-			Code: ERR_FS_STAT,
-			Data: map[string]any{"path": localImagePath},
-		}
+		return log.ErrData(ERR_FS_STAT, err, map[string]any{"path": localImagePath})
 	}
 
 	meta := &Meta{
 		tpe:          TYPE_IMAGE,
 		status:       200,
-		contentType:  contentType,
-		cacheControl: "public,max-age=" + strconv.Itoa(int(expires)), // TODO, this is an absolute value, it should be a TTL, duh
 		expires:      expires,
+		contentType:  contentType,
 		bodyLength:   uint32(fi.Size()),
+		cacheControl: "public,max-age=" + strconv.Itoa(int(expires)), // TODO, this is an absolute value, it should be a TTL, duh
 	}
 
 	if err := u.save(meta, localMetaPath, env); err != nil {
@@ -582,4 +573,12 @@ func openForWrite(local string, env *Env) (*os.File, error) {
 	}
 
 	return f, nil
+}
+
+func isImage(res *gohttp.Response) bool {
+	ct := strings.ToLower(res.Header.Get("Content-Type"))
+	return ct == "image/png" ||
+		ct == "image/webp" ||
+		ct == "image/jpeg" ||
+		ct == "image/gif"
 }

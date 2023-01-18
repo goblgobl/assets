@@ -92,9 +92,10 @@ func PingHandler(conn *fasthttp.RequestCtx) (http.Response, error) {
 
 func AssetHandler(conn *fasthttp.RequestCtx, env *Env) (http.Response, error) {
 	remotePath := conn.UserValue("path").(string)
-	extension := filepath.Ext(remotePath)
+	env.requestLogger.String("path", remotePath)
 
-	switch strings.ToLower(extension) {
+	extension := strings.ToLower(filepath.Ext(remotePath))
+	switch extension {
 	case ".png", ".jpg", ".gif", ".webp":
 		return serveImage(conn, env, remotePath, extension)
 	default:
@@ -135,17 +136,15 @@ func serveImage(conn *fasthttp.RequestCtx, env *Env, remotePath string, extensio
 			return res, err
 		}
 		if res := upstream.LoadLocalImage(localMetaPath, localImagePath, env); res != nil {
+			// not considered a cache hit since we had to fetch it from the origin first
+			res.hit = false
 			return res, nil
 		}
 
-		return nil, log.StructuredError{
-			Err:  err,
-			Code: ERR_LOCAL_IMAGE_MISSING,
-			Data: map[string]any{
-				"remote": remotePath,
-				"local":  localImagePath,
-			},
-		}
+		return nil, log.ErrData(ERR_LOCAL_IMAGE_MISSING, err, map[string]any{
+			"remote": remotePath,
+			"local":  localImagePath,
+		})
 	}
 
 	originMetaPath, originImagePath := upstream.LocalImagePath(remotePath, extension, nil)
@@ -173,28 +172,22 @@ func serveImage(conn *fasthttp.RequestCtx, env *Env, remotePath string, extensio
 	}
 
 	if err := upstream.TransformImage(originImagePath, localMetaPath, localImagePath, xformArgs, expires, env); err != nil {
-		return nil, log.StructuredError{
-			Err:  err,
-			Code: ERR_TRANSFORM,
-			Data: map[string]any{
-				"xform":  xform,
-				"remote": remotePath,
-			},
-		}
+		return nil, log.ErrData(ERR_TRANSFORM, err, map[string]any{
+			"xform":  xform,
+			"remote": remotePath,
+		})
 	}
 
 	if res := upstream.LoadLocalImage(localMetaPath, localImagePath, env); res != nil {
+		// not considered a cache hit since we had to fetch it from the origin first
+		res.hit = false
 		return res, nil
 	}
 
-	return nil, log.StructuredError{
-		Err:  err,
-		Code: ERR_LOCAL_IMAGE_MISSING,
-		Data: map[string]any{
-			"remote": remotePath,
-			"local":  localImagePath,
-		},
-	}
+	return nil, log.ErrData(ERR_LOCAL_IMAGE_MISSING, err, map[string]any{
+		"remote": remotePath,
+		"local":  localImagePath,
+	})
 }
 
 func serveStatic(conn *fasthttp.RequestCtx, env *Env, remotePath string, extension string) (http.Response, error) {

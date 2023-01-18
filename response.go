@@ -146,7 +146,6 @@ func (m *Meta) Serialize(w io.Writer) error {
 // then be loaded as a LocalResponse)
 type RemoteResponse struct {
 	meta   *Meta
-	path   string
 	buffer *buffer.Buffer
 }
 
@@ -176,7 +175,6 @@ func (r *RemoteResponse) Write(conn *fasthttp.RequestCtx, logger log.Logger) log
 
 	return logger.
 		Bool("hit", false).
-		String("path", r.path).
 		Int("res", bodyLength).
 		Int("status", status)
 }
@@ -204,7 +202,7 @@ func (r *RemoteResponse) Serialize(w io.Writer) error {
 // A response which is loaded from the local file system. Or a "cached" response
 // We expect most responses to be a LocalResponse, because we expect heavy caching.
 type LocalResponse struct {
-	path     string
+	hit      bool
 	meta     *Meta
 	file     *os.File
 	upstream *Upstream
@@ -217,6 +215,7 @@ func NewLocalResponse(upstream *Upstream, file *os.File) (*LocalResponse, error)
 	}
 
 	return &LocalResponse{
+		hit:      true,
 		file:     file,
 		meta:     meta,
 		upstream: upstream,
@@ -245,8 +244,7 @@ func (r *LocalResponse) Write(conn *fasthttp.RequestCtx, logger log.Logger) log.
 	conn.SetBodyStream(r, bodyLength)
 
 	return logger.
-		Bool("hit", true).
-		String("path", r.path).
+		Bool("hit", r.hit).
 		Int("res", bodyLength).
 		Int("status", status)
 }
@@ -259,46 +257,5 @@ func (r *LocalResponse) Close() error {
 }
 
 func (r *LocalResponse) Read(p []byte) (int, error) {
-	return r.file.Read(p)
-}
-
-// A response of an image off the file system
-type ImageResponse struct {
-	file *os.File
-}
-
-func NewImageResponse(file *os.File) ImageResponse {
-	return ImageResponse{file: file}
-}
-
-// func (r *ImageResponse) PathLog(path string) {
-// 	r.path = path
-// }
-
-func (r ImageResponse) Write(conn *fasthttp.RequestCtx, logger log.Logger) log.Logger {
-	stats, _ := r.file.Stat()
-	bodyLength := int(stats.Size())
-
-	conn.SetStatusCode(200)
-	// TODO: content type
-
-	// SetBodyStream will close the file
-	conn.SetBodyStream(r, bodyLength)
-
-	return logger.
-		Bool("hit", true).
-		// String("path", r.path).
-		Int("res", bodyLength).
-		Int("status", 200)
-}
-
-// Close will automatically be called when the response is written (this is
-// handled by fasthttp), but there might be cases where a LocalResponse is never
-// writen (like if we decide that it's invalid, such as when it's expired
-func (r ImageResponse) Close() error {
-	return r.file.Close()
-}
-
-func (r ImageResponse) Read(p []byte) (int, error) {
 	return r.file.Read(p)
 }
