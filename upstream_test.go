@@ -17,10 +17,6 @@ import (
 	"src.goblgobl.com/utils/log"
 )
 
-func init() {
-	Config.CacheRoot = "tests/"
-}
-
 func Test_NewUpstream_NoDefaultCaching(t *testing.T) {
 	up, err := NewUpstream("up2_local", &upstreamConfig{
 		BaseURL: "https://src.goblgobl.com/assets/",
@@ -37,7 +33,7 @@ func Test_NewUpstream_NoDefaultCaching(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, up.baseURL, "https://src.goblgobl.com/assets/")
 
-	assert.Equal(t, string(up.cacheRoot), "tests/up2_local/")
+	assert.Equal(t, string(up.cacheRoot), "cache/up2_local/")
 
 	// default TTL is set to 300
 	assert.Equal(t, up.defaultTTL, 300)
@@ -211,13 +207,13 @@ func Test_Upstream_OriginImageCheck_HasImage(t *testing.T) {
 
 func Test_Upstream_SaveOriginImage_Success(t *testing.T) {
 	up := testUpstream2()
-	remotePath := "docs/favicon.png"
+	remotePath := "favicon.png"
 	metaPath, imagePath := up.LocalImagePath(remotePath, ".png", nil)
 
 	res, expires, err := up.SaveOriginImage(remotePath, metaPath, imagePath, NewEnv(up))
 	assert.Nil(t, err)
 	assert.Nil(t, res)
-	assert.Delta(t, expires, uint32(time.Now().Unix()+604800)-1, 2)
+	assert.Delta(t, expires, uint32(time.Now().Unix()+598765)-1, 2)
 
 	assertFileHash(t, imagePath, "2c859096f003dddb6b78787eae13e910d3b268d374299645ae14063c689be8a4")
 }
@@ -247,7 +243,11 @@ func testUpstream2() *Upstream {
 
 func testUpstream(name string) *Upstream {
 	up, err := NewUpstream(name, &upstreamConfig{
-		BaseURL: "https://www.goblgobl.com/",
+		VipsTransforms: map[string][]string{
+			"thumb_100": []string{"--size", "100x150", "-m", "attention"},
+			"thumb_200": []string{"--size", "200x200"},
+		},
+		BaseURL: "https://www.goblgobl.com/docs/",
 		Buffers: &buffer.Config{
 			Count: 2,
 			Min:   4096,

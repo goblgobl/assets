@@ -460,13 +460,15 @@ func (u *Upstream) TransformImage(originImagePath string, localMetaPath string, 
 		return log.ErrData(ERR_FS_STAT, err, map[string]any{"path": localImagePath})
 	}
 
+	maxAge := strconv.Itoa(int(expires) - int(time.Now().Unix()))
+
 	meta := &Meta{
 		tpe:          TYPE_IMAGE,
 		status:       200,
 		expires:      expires,
 		contentType:  contentType,
 		bodyLength:   uint32(fi.Size()),
-		cacheControl: "public,max-age=" + strconv.Itoa(int(expires)), // TODO, this is an absolute value, it should be a TTL, duh
+		cacheControl: "public,max-age=" + maxAge, // TODO, this is an absolute value, it should be a TTL, duh
 	}
 
 	if err := u.save(meta, localMetaPath, env); err != nil {
