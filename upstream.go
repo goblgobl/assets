@@ -439,7 +439,7 @@ func (u *Upstream) TransformImage(originImagePath string, localMetaPath string, 
 	}
 
 	contentType := ""
-	ext := strings.ToLower(filepath.Ext(localImagePath))
+	ext := lowercase(filepath.Ext(localImagePath))
 
 	switch ext {
 	case ".png":
@@ -578,7 +578,7 @@ func openForWrite(local string, env *Env) (*os.File, error) {
 }
 
 func isImage(res *gohttp.Response) bool {
-	ct := strings.ToLower(res.Header.Get("Content-Type"))
+	ct := lowercase(res.Header.Get("Content-Type"))
 	return ct == "image/png" ||
 		ct == "image/webp" ||
 		ct == "image/jpeg" ||

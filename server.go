@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"src.goblgobl.com/utils"
 	"src.goblgobl.com/utils/http"
@@ -94,7 +93,7 @@ func AssetHandler(conn *fasthttp.RequestCtx, env *Env) (http.Response, error) {
 	remotePath := conn.UserValue("path").(string)
 	env.requestLogger.String("path", remotePath)
 
-	extension := strings.ToLower(filepath.Ext(remotePath))
+	extension := lowercase(filepath.Ext(remotePath))
 	switch extension {
 	case ".png", ".jpg", ".gif", ".webp":
 		return serveImage(conn, env, remotePath, extension)
