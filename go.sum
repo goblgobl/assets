@@ -31,7 +31,7 @@ golang.org/x/term v0.0.0-20210927222741-03fcf44c2211/go.mod h1:jbD1KX2456YbFQfuX
 golang.org/x/text v0.3.6/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
 golang.org/x/text v0.3.7/go.mod h1:u+2+/6zg+i71rQMx5EYifcz6MCKuco9NR6JIITiCfzQ=
 golang.org/x/tools v0.0.0-20180917221912-90fa682c2a6e/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
-src.goblgobl.com/tests v0.0.5 h1:kzZr1HUsZbDp0N7tp9g4kzI4Jyiy8kwBt3QDSAm86GQ=
-src.goblgobl.com/tests v0.0.5/go.mod h1:5B+5LiBx4CxJ69MkopxcyzebxWkN3Rd+7rWGFoO23JI=
-src.goblgobl.com/utils v0.0.5 h1:zrcfEcqaxT477+XFZTz3cAok7dLxGA5M7x0O4wKBqFY=
-src.goblgobl.com/utils v0.0.5/go.mod h1:HFj/wKrZ18D2dHLgd210xyBosJDiSux8xY1JuDdyK2o=
+src.goblgobl.com/tests v0.0.6 h1:EMY2czlbmIWGj+hPR6gzaaBG7tqg6DQFOwoT2+o4P8M=
+src.goblgobl.com/tests v0.0.6/go.mod h1:EE/4gmMawoI0RhZqFryaFLKMTioBlH0315ppDE8cI6U=
+src.goblgobl.com/utils v0.0.6 h1:DsnfgpdQKZe6Gr8zCndKSI2omOg8EyT5B1/fyOT2bw8=
+src.goblgobl.com/utils v0.0.6/go.mod h1:HFj/wKrZ18D2dHLgd210xyBosJDiSux8xY1JuDdyK2o=

@@ -2,16 +2,16 @@ module src.goblgobl.com/assets
 
 go 1.19
 
-replace src.goblgobl.com/utils => ../utils
+// replace src.goblgobl.com/utils => ../utils
 
-replace src.goblgobl.com/tests => ../tests
+// replace src.goblgobl.com/tests => ../tests
 
 require (
 	github.com/fasthttp/router v1.4.14
 	github.com/valyala/fasthttp v1.43.0
 	golang.org/x/sync v0.1.0
-	src.goblgobl.com/tests v0.0.5
-	src.goblgobl.com/utils v0.0.5
+	src.goblgobl.com/tests v0.0.6
+	src.goblgobl.com/utils v0.0.6
 )
 
 require (
