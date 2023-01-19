@@ -50,11 +50,15 @@ func (e *Env) Fatal(ctx string) log.Logger {
 }
 
 func (e *Env) Request(route string) log.Logger {
-	logger := e.logger.Request(route)
+	logger := log.Checkout().
+		Field(e.upstream.logField).
+		String("rid", e.requestId).
+		Request(route)
 	e.requestLogger = logger
 	return logger
 }
 
 func (e *Env) Release() {
 	e.logger.Release()
+	e.requestLogger.Release()
 }
