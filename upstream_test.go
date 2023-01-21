@@ -234,7 +234,7 @@ func Test_Upstream_SaveOriginImage_NotFound(t *testing.T) {
 	conn := &fasthttp.RequestCtx{}
 	local.Write(conn, log.Noop{})
 	body := request.Res(t, conn).ExpectNotFound().Body
-	assert.StringContains(t, body, "102005")
+	assert.StringContains(t, body, "202005")
 }
 
 func testUpstream2() *Upstream {

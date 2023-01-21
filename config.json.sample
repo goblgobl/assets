@@ -6,7 +6,7 @@
     "gobl": {
       "base_url": "https://www.goblgobl.com/docs/",
       "transforms": {
-        "thumb_100": ["--size", "100x150"]
+        "thumb_100x150": ["--size", "100x150", "-m", "attention"]
       }
     }
   }

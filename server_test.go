@@ -49,7 +49,7 @@ func Test_LoadEnv_Missing_Up(t *testing.T) {
 	assert.Nil(t, err)
 
 	res.Write(conn, log.Noop{})
-	request.Res(t, conn).ExpectInvalid(102_002)
+	request.Res(t, conn).ExpectInvalid(202_002)
 }
 
 func Test_LoadEnv_Invalid_Up(t *testing.T) {
@@ -59,7 +59,7 @@ func Test_LoadEnv_Invalid_Up(t *testing.T) {
 	assert.Nil(t, err)
 
 	res.Write(conn, log.Noop{})
-	request.Res(t, conn).ExpectInvalid(102_003)
+	request.Res(t, conn).ExpectInvalid(202_003)
 }
 
 func Test_LoadEnv_Ok(t *testing.T) {
@@ -81,13 +81,13 @@ func Test_AssetHandler_NotFound(t *testing.T) {
 	request.ReqT(t, env).
 		UserValue("path", "not_exists").
 		Get(AssetHandler).
-		ExpectNotFound(102005)
+		ExpectNotFound(202_005)
 
 		// load from cache
 	request.ReqT(t, env).
 		UserValue("path", "not_exists").
 		Get(AssetHandler).
-		ExpectNotFound(102005)
+		ExpectNotFound(202_005)
 }
 
 func Test_AssetHandler_StaticAsset(t *testing.T) {
@@ -127,7 +127,7 @@ func Test_AssetHandler_ExpiredLocal(t *testing.T) {
 	request.ReqT(t, env).
 		UserValue("path", "expired").
 		Get(AssetHandler).
-		ExpectNotFound(102005)
+		ExpectNotFound(202_005)
 }
 
 func Test_AssetHandler_InvalidXForm(t *testing.T) {
@@ -136,7 +136,7 @@ func Test_AssetHandler_InvalidXForm(t *testing.T) {
 		UserValue("path", "nope.jpg").
 		Query("xform", "invalid").
 		Get(AssetHandler).
-		ExpectInvalid(102_004)
+		ExpectInvalid(202_004)
 }
 
 func Test_AssetHandler_MissingOrigin_NoXForm(t *testing.T) {

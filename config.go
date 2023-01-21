@@ -14,6 +14,7 @@ var (
 	Config         config
 	DefaultCaching = []upstreamCacheConfig{
 		upstreamCacheConfig{Status: 0, TTL: 300},
+		upstreamCacheConfig{Status: 404, TTL: -60},
 		upstreamCacheConfig{Status: 200, TTL: 3600},
 	}
 )

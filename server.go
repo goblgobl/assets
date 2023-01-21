@@ -46,8 +46,8 @@ func handler() func(ctx *fasthttp.RequestCtx) {
 	r := router.New()
 
 	// misc routes
-	r.GET("/v1/ping", http.NoEnvHandler("ping", PingHandler))
-	r.GET("/v1/info", http.NoEnvHandler("info", InfoHandler))
+	r.GET("/ping", http.NoEnvHandler("ping", PingHandler))
+	r.GET("/info", http.NoEnvHandler("info", InfoHandler))
 
 	// asset proxy routes
 	r.GET("/v1/{path:*}", http.Handler("v1", loadEnv, AssetHandler))

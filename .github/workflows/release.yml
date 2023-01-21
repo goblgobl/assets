@@ -1,0 +1,46 @@
+name: Main
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: commit.txt
+        run: git rev-parse HEAD | tr -d "\n" > http/misc/commit.txt
+      -
+        name: Build
+        uses: crazy-max/ghaction-xgo@v2
+        with:
+          pkg: "cmd"
+          trimpath: true
+          prefix: assets
+          ldflags: -s -w
+          targets: linux/amd64,linux/arm64,darwin/amd64,darwin/arm64
+      -
+        name: Shrink (UPX)
+        uses: crazy-max/ghaction-upx@v2
+        with:
+          version: latest
+          files: |
+            /home/runner/work/assets/assets/build/assets-linux-amd64
+            /home/runner/work/assets/assets/build/assets-linux-arm64
+            /home/runner/work/assets/assets/build/assets-darwin-arm64
+            /home/runner/work/assets/assets/build/assets-darwin-amd64
+      -
+        name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            LICENSE
+            /home/runner/work/assets/assets/build/assets-linux-amd64
+            /home/runner/work/assets/assets/build/assets-linux-arm64
+            /home/runner/work/assets/assets/build/assets-darwin-arm64
+            /home/runner/work/assets/assets/build/assets-darwin-amd64
