@@ -23,7 +23,7 @@ func Test_Meta_Serialize_And_Read(t *testing.T) {
 	b := new(bytes.Buffer)
 	assert.Nil(t, m1.Serialize(b))
 
-	m2, err := MetaFromReader(testUpstream2(), b)
+	m2, err := MetaFromReader(testUpstream2(), b, true)
 	assert.Nil(t, err)
 	assert.Equal(t, m2.tpe, 9)
 	assert.Equal(t, m2.status, 999)
@@ -31,6 +31,17 @@ func Test_Meta_Serialize_And_Read(t *testing.T) {
 	assert.Equal(t, m2.bodyLength, 345)
 	assert.Equal(t, m2.contentType, "a/type")
 	assert.Equal(t, m2.cacheControl, "forever")
+
+	b.Reset()
+	assert.Nil(t, m1.Serialize(b))
+	m3, err := MetaFromReader(testUpstream2(), b, false)
+	assert.Nil(t, err)
+	assert.Equal(t, m3.tpe, 9)
+	assert.Equal(t, m3.status, 999)
+	assert.Equal(t, m3.expires, 12)
+	assert.Equal(t, m3.bodyLength, 345)
+	assert.Equal(t, m3.contentType, "")
+	assert.Equal(t, m3.cacheControl, "")
 }
 
 func Test_Meta_FromResponse(t *testing.T) {

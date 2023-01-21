@@ -28,7 +28,7 @@ func Test_NewUpstream_NoDefaultCaching(t *testing.T) {
 		Caching: []upstreamCacheConfig{
 			upstreamCacheConfig{Status: 200, TTL: 60},
 		},
-		VipsTransforms: map[string][]string{"large": []string{"--size", "200x100"}},
+		Transforms: map[string][]string{"large": []string{"--size", "200x100"}},
 	})
 	assert.Nil(t, err)
 	assert.Equal(t, up.baseURL, "https://src.goblgobl.com/assets/")
@@ -40,9 +40,9 @@ func Test_NewUpstream_NoDefaultCaching(t *testing.T) {
 	assert.Equal(t, len(up.ttls), 1)
 	assert.Equal(t, up.ttls[200], 60)
 
-	assert.Equal(t, len(up.vipsTransforms), 1)
-	assert.Equal(t, up.vipsTransforms["large"][0], "--size")
-	assert.Equal(t, up.vipsTransforms["large"][1], "200x100")
+	assert.Equal(t, len(up.transforms), 1)
+	assert.Equal(t, up.transforms["large"][0], "--size")
+	assert.Equal(t, up.transforms["large"][1], "200x100")
 }
 
 func Test_NewUpstream_WithDefaultCaching(t *testing.T) {
@@ -243,7 +243,7 @@ func testUpstream2() *Upstream {
 
 func testUpstream(name string) *Upstream {
 	up, err := NewUpstream(name, &upstreamConfig{
-		VipsTransforms: map[string][]string{
+		Transforms: map[string][]string{
 			"thumb_100": []string{"--size", "100x150", "-m", "attention"},
 			"thumb_200": []string{"--size", "200x200"},
 		},

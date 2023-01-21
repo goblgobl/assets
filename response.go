@@ -55,7 +55,7 @@ func MetaFromResponse(res *gohttp.Response, ttl uint32, tpe byte, bodyLength uin
 	}
 }
 
-func MetaFromReader(upstream *Upstream, r io.Reader) (*Meta, error) {
+func MetaFromReader(upstream *Upstream, r io.Reader, readHeaders bool) (*Meta, error) {
 	var header [17]byte
 	n, err := r.Read(header[:])
 	if err != nil {
@@ -78,7 +78,7 @@ func MetaFromReader(upstream *Upstream, r io.Reader) (*Meta, error) {
 	cacheControlLength := header[12]
 	var contentType, cacheControl string
 
-	if contentTypeLength > 0 || cacheControlLength > 0 {
+	if readHeaders && (contentTypeLength > 0 || cacheControlLength > 0) {
 		buffer := upstream.buffers.Checkout()
 		defer buffer.Release()
 		// this should not be able to fail, since our config enforces buffers are
@@ -208,8 +208,8 @@ type LocalResponse struct {
 	upstream *Upstream
 }
 
-func NewLocalResponse(upstream *Upstream, file *os.File) (*LocalResponse, error) {
-	meta, err := MetaFromReader(upstream, file)
+func NewLocalResponse(upstream *Upstream, file *os.File, readHeaders bool) (*LocalResponse, error) {
+	meta, err := MetaFromReader(upstream, file, readHeaders)
 	if err != nil {
 		return nil, err
 	}

@@ -110,7 +110,7 @@ func serveImage(conn *fasthttp.RequestCtx, env *Env, remotePath string, extensio
 
 	var xformArgs []string
 	if xform != nil {
-		if xformArgs = upstream.vipsTransforms[utils.B2S(xform)]; xformArgs == nil {
+		if xformArgs = upstream.transforms[utils.B2S(xform)]; xformArgs == nil {
 			return resInvalidXForm, nil
 		}
 	}

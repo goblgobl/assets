@@ -57,7 +57,7 @@ type Upstream struct {
 	defaultTTL uint32
 
 	// xform parameter -> vips command line
-	vipsTransforms map[string][]string
+	transforms map[string][]string
 
 	notFoundCache *NotFoundCache
 }
@@ -85,15 +85,15 @@ func NewUpstream(name string, config *upstreamConfig) (*Upstream, error) {
 	}
 
 	return &Upstream{
-		name:           name,
-		sf:             new(singleflight.Group),
-		baseURL:        config.BaseURL,
-		client:         &gohttp.Client{},
-		cacheRoot:      []byte(cacheRoot),
-		defaultTTL:     uint32(defaultTTL),
-		ttls:           ttls,
-		vipsTransforms: config.VipsTransforms,
-		notFoundCache:  NewNotFoundCache(100_000),
+		name:          name,
+		sf:            new(singleflight.Group),
+		baseURL:       config.BaseURL,
+		client:        &gohttp.Client{},
+		cacheRoot:     []byte(cacheRoot),
+		defaultTTL:    uint32(defaultTTL),
+		ttls:          ttls,
+		transforms:    config.Transforms,
+		notFoundCache: NewNotFoundCache(100_000),
 
 		// If we let this start at 0, then restarts are likely to produce duplicates.
 		// While we make no guarantees about the uniqueness of the requestId, there's
@@ -123,7 +123,7 @@ func (u *Upstream) LoadLocalResponse(localPath string, env *Env, force bool) htt
 		return nil
 	}
 
-	lr, err := NewLocalResponse(u, f)
+	lr, err := NewLocalResponse(u, f, true)
 	if err != nil {
 		f.Close()
 		env.Error("Upstream.LoadLocal.read").String("path", localPath).Err(err).Log()
@@ -159,7 +159,7 @@ func (u *Upstream) LoadLocalImage(localMetaPath string, localImagePath string, e
 	// setup the actual image. However, we might _only_ have metadata, say if
 	// this is a 404.
 
-	lr, err := NewLocalResponse(u, f)
+	lr, err := NewLocalResponse(u, f, true)
 	if err != nil {
 		f.Close()
 		env.Error("Upstream.LoadLocalImage.NewLocalResponse").String("path", localMetaPath).Err(err).Log()
@@ -204,12 +204,8 @@ func (u *Upstream) OriginImageCheck(localMetaPath string, env *Env) (http.Respon
 		return nil, 0, err
 	}
 
-	// TODO: NewLocalResponse reads more from the file than we strictly need
-	// here. Specifically, it reads/allocates both the content-type and cache-control
-	// header, which we don't need here.
-
 	// lr owns f
-	lr, err := NewLocalResponse(u, f)
+	lr, err := NewLocalResponse(u, f, false)
 	if err != nil {
 		// this should not happen, let's pretend the file simply doesn't exist
 		env.Error("Upstream.OriginImageCheck").Err(err).String("path", localMetaPath).Log()

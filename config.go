@@ -34,10 +34,10 @@ type httpConfig struct {
 }
 
 type upstreamConfig struct {
-	BaseURL        string                `json:"base_url"`
-	Buffers        *buffer.Config        `json:"buffers"`
-	Caching        []upstreamCacheConfig `json:"caching"`
-	VipsTransforms map[string][]string   `json:"vips_transforms"`
+	BaseURL    string                `json:"base_url"`
+	Buffers    *buffer.Config        `json:"buffers"`
+	Caching    []upstreamCacheConfig `json:"caching"`
+	Transforms map[string][]string   `json:"transforms"`
 }
 
 type upstreamCacheConfig struct {
@@ -90,10 +90,14 @@ func Configure(filePath string) error {
 			// these for are generating cache keys and a few other string
 			// concatenations
 			up.Buffers = &buffer.Config{
-				Count: 100,
+				Count: 10,
 				Min:   131072,  // 128KB,
-				Max:   1048576, // 1MB
+				Max:   5242880, // 5MB
 			}
+		}
+
+		if up.Buffers.Count == 0 {
+			up.Buffers.Count = 10
 		}
 
 		if up.Buffers.Min < 255 {
