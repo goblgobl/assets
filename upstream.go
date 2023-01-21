@@ -24,6 +24,7 @@ import (
 
 var (
 	errSingleflightLocalLoad = errors.New("Singleflight local load error")
+	resNotFound              = http.StaticError(404, RES_NOT_FOUND_CACHE, "not found")
 )
 
 type Upstream struct {
@@ -57,6 +58,8 @@ type Upstream struct {
 
 	// xform parameter -> vips command line
 	vipsTransforms map[string][]string
+
+	notFoundCache *NotFoundCache
 }
 
 func NewUpstream(name string, config *upstreamConfig) (*Upstream, error) {
@@ -90,6 +93,7 @@ func NewUpstream(name string, config *upstreamConfig) (*Upstream, error) {
 		defaultTTL:     uint32(defaultTTL),
 		ttls:           ttls,
 		vipsTransforms: config.VipsTransforms,
+		notFoundCache:  NewNotFoundCache(100_000),
 
 		// If we let this start at 0, then restarts are likely to produce duplicates.
 		// While we make no guarantees about the uniqueness of the requestId, there's
@@ -105,11 +109,15 @@ func (u *Upstream) NextRequestId() string {
 	return utils.EncodeRequestId(nextId, Config.InstanceId)
 }
 
-func (u *Upstream) LoadLocalResponse(localPath string, env *Env, force bool) *LocalResponse {
+func (u *Upstream) LoadLocalResponse(localPath string, env *Env, force bool) http.Response {
 	f, err := os.Open(localPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if u.notFoundCache.Get(localPath) {
+				return resNotFound
+			}
 			return nil
+
 		}
 		env.Error("Upstream.LoadLocal.open").String("path", localPath).Err(err).Log()
 		return nil
@@ -184,10 +192,13 @@ func (u *Upstream) LoadLocalImage(localMetaPath string, localImagePath string, e
 // non-image response (we cache negative responses too), in which case we'll
 // returna  LocalResponse so that the cached response can be sent to the client
 // as-is, without any additional image processing.
-func (u *Upstream) OriginImageCheck(localMetaPath string, env *Env) (*LocalResponse, uint32, error) {
+func (u *Upstream) OriginImageCheck(localMetaPath string, env *Env) (http.Response, uint32, error) {
 	f, err := os.Open(localMetaPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if u.notFoundCache.Get(localMetaPath) {
+				return resNotFound, 0, nil
+			}
 			return nil, 0, nil
 		}
 		return nil, 0, err
@@ -324,6 +335,11 @@ func (u *Upstream) GetResponseAndSave(remotePath string, localPath string, env *
 		return nil, err
 	}
 
+	// don't like this, but what are you gonna do?
+	if static, ok := res.(http.StaticResponse); ok {
+		return static, nil
+	}
+
 	// This is the goroutine that actually executed the HTTP request to the upstream
 	// and thus we designate it as the owner of the response
 	if owner {
@@ -345,6 +361,10 @@ func (u *Upstream) GetResponseAndSave(remotePath string, localPath string, env *
 func (u *Upstream) SaveOriginImage(remotePath string, localMetaPath string, localImagePath string, env *Env) (http.Response, uint32, error) {
 	owner := false
 
+	if u.notFoundCache.Get(localMetaPath) {
+		return resNotFound, 0, nil
+	}
+
 	res, err, _ := u.sf.Do(remotePath, func() (any, error) {
 		owner = true
 		remoteURL := u.baseURL + remotePath
@@ -353,11 +373,20 @@ func (u *Upstream) SaveOriginImage(remotePath string, localMetaPath string, loca
 			return nil, log.ErrData(ERR_PROXY, err, map[string]any{"url": remoteURL})
 		}
 
-		if res.StatusCode != 200 || !isImage(res) {
+		body := res.Body
+		status := res.StatusCode
+		ttl := u.calculateTTL(res)
+
+		if status == 404 {
+			body.Close()
+			u.notFoundCache.Set(localMetaPath, ttl)
+			return resNotFound, nil
+		}
+
+		if status != 200 || !isImage(res) {
 			return u.createAndSaveRemoteResponse(res, localMetaPath, TYPE_GENERIC, env)
 		}
 
-		body := res.Body
 		defer body.Close()
 
 		f, err := openForWrite(localImagePath, env)
@@ -372,7 +401,6 @@ func (u *Upstream) SaveOriginImage(remotePath string, localMetaPath string, loca
 			return nil, err
 		}
 
-		ttl := u.calculateTTL(res)
 		meta := MetaFromResponse(res, ttl, TYPE_IMAGE, uint32(bodyLength))
 		if err := u.save(meta, localMetaPath, env); err != nil {
 			os.Remove(localImagePath)
@@ -392,6 +420,10 @@ func (u *Upstream) SaveOriginImage(remotePath string, localMetaPath string, loca
 		// want the full response/image because our caller wants to transform it
 		// (hence it just wants it on disk)
 		return nil, expires, nil
+	}
+
+	if static, ok := res.(http.StaticResponse); ok {
+		return static, 0, nil
 	}
 
 	// Ideally, we shouldn't be here. We're only here because our above closure
@@ -478,9 +510,16 @@ func (u *Upstream) TransformImage(originImagePath string, localMetaPath string, 
 	return nil
 }
 
-func (u *Upstream) createAndSaveRemoteResponse(res *gohttp.Response, localPath string, tpe byte, env *Env) (*RemoteResponse, error) {
+func (u *Upstream) createAndSaveRemoteResponse(res *gohttp.Response, localPath string, tpe byte, env *Env) (http.Response, error) {
 	body := res.Body
 	defer body.Close()
+
+	ttl := u.calculateTTL(res)
+
+	if res.StatusCode == 404 {
+		u.notFoundCache.Set(localPath, ttl)
+		return resNotFound, nil
+	}
 
 	buf := u.buffers.Checkout()
 	_, err := io.Copy(buf, body)
@@ -497,7 +536,6 @@ func (u *Upstream) createAndSaveRemoteResponse(res *gohttp.Response, localPath s
 		return nil, err
 	}
 
-	ttl := u.calculateTTL(res)
 	rr := NewRemoteResponse(res, buf, ttl, tpe)
 	u.save(rr, localPath, env)
 	return rr, nil

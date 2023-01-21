@@ -60,5 +60,4 @@ func (e *Env) Request(route string) log.Logger {
 
 func (e *Env) Release() {
 	e.logger.Release()
-	e.requestLogger.Release()
 }

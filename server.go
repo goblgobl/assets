@@ -198,9 +198,5 @@ func serveStatic(conn *fasthttp.RequestCtx, env *Env, remotePath string, extensi
 		return lr, nil
 	}
 
-	rr, err := upstream.GetResponseAndSave(remotePath, localPath, env)
-	if err != nil {
-		return nil, err
-	}
-	return rr, nil
+	return upstream.GetResponseAndSave(remotePath, localPath, env)
 }

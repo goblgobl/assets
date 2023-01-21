@@ -3,8 +3,8 @@
     "level": "info"
   },
   "upstreams": {
-    "google": {
-      "base_url": "https://www.google.com/images/branding/",
+    "gobl": {
+      "base_url": "https://www.goblgobl.com/docs/",
       "vips_transforms": {
         "thumb_100": ["--size", "100x150"]
       }

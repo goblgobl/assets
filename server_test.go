@@ -78,19 +78,16 @@ func Test_AssetHandler_NotFound(t *testing.T) {
 	clearLocalCache()
 	env := NewEnv(testUpstream2())
 
-	res := request.ReqT(t, env).
+	request.ReqT(t, env).
 		UserValue("path", "not_exists").
 		Get(AssetHandler).
-		ExpectNotFound()
-	assert.StringContains(t, res.Body, "openresty")
+		ExpectNotFound(102005)
 
-	// make sure we get this from the local file after our first fetch
-	writeLocal(env, "not_exists", BuildRemoteResponse().Body("nope").Status(404).Response())
-	res = request.ReqT(t, env).
+		// load from cache
+	request.ReqT(t, env).
 		UserValue("path", "not_exists").
 		Get(AssetHandler).
-		ExpectNotFound()
-	assert.Equal(t, res.Body, "nope")
+		ExpectNotFound(102005)
 }
 
 func Test_AssetHandler_StaticAsset(t *testing.T) {
@@ -126,15 +123,11 @@ func Test_AssetHandler_ExpiredLocal(t *testing.T) {
 	env := NewEnv(testUpstream2())
 
 	rr := BuildRemoteResponse().Body("hello").Status(200).Expires(-2).Response()
-	localPath := writeLocal(env, "expired", rr)
+	writeLocal(env, "expired", rr)
 	request.ReqT(t, env).
 		UserValue("path", "expired").
 		Get(AssetHandler).
-		ExpectNotFound()
-
-	// make sure it wrote the new version to our local cache
-	data, _ := os.ReadFile(localPath)
-	assert.StringContains(t, string(data), "404 Not Found")
+		ExpectNotFound(102005)
 }
 
 func Test_AssetHandler_InvalidXForm(t *testing.T) {

@@ -2,7 +2,7 @@ module src.goblgobl.com/assets
 
 go 1.19
 
-// replace src.goblgobl.com/utils => ../utils
+replace src.goblgobl.com/utils => ../utils
 
 // replace src.goblgobl.com/tests => ../tests
 
