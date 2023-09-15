@@ -46,7 +46,7 @@ type Upstream struct {
 	// receiving the reply from the first
 	sf *singleflight.Group
 
-	buffers *buffer.Pool
+	buffers buffer.Pool
 
 	logField log.Field
 

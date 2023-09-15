@@ -17,4 +17,5 @@ const (
 	ERR_TRANSFORM             = 203_008
 	ERR_LOCAL_IMAGE_MISSING   = 203_009
 	ERR_FS_STAT               = 203_010
+	ERR_UNCAUGHT_HTTP         = 203_011
 )

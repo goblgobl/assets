@@ -76,7 +76,7 @@ func loadEnv(conn *fasthttp.RequestCtx) (*Env, http.Response, error) {
 }
 
 func InfoHandler(conn *fasthttp.RequestCtx) (http.Response, error) {
-	return http.Ok(struct {
+	return http.OK(struct {
 		Go     string `json:"go"`
 		Commit string `json:"commit"`
 	}{
@@ -86,7 +86,7 @@ func InfoHandler(conn *fasthttp.RequestCtx) (http.Response, error) {
 }
 
 func PingHandler(conn *fasthttp.RequestCtx) (http.Response, error) {
-	return http.OkBytes([]byte(`{"ok":true}`)), nil
+	return http.OKBytes([]byte(`{"ok":true}`)), nil
 }
 
 func AssetHandler(conn *fasthttp.RequestCtx, env *Env) (http.Response, error) {

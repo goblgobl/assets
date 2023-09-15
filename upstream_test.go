@@ -207,7 +207,7 @@ func Test_Upstream_OriginImageCheck_HasImage(t *testing.T) {
 
 func Test_Upstream_SaveOriginImage_Success(t *testing.T) {
 	up := testUpstream2()
-	remotePath := "favicon.png"
+	remotePath := "assets/tests/tea.png"
 	metaPath, imagePath := up.LocalImagePath(remotePath, ".png", nil)
 
 	res, expires, err := up.SaveOriginImage(remotePath, metaPath, imagePath, NewEnv(up))
@@ -215,7 +215,7 @@ func Test_Upstream_SaveOriginImage_Success(t *testing.T) {
 	assert.Nil(t, res)
 	assert.Delta(t, expires, uint32(time.Now().Unix()+598765)-1, 2)
 
-	assertFileHash(t, imagePath, "2c859096f003dddb6b78787eae13e910d3b268d374299645ae14063c689be8a4")
+	assertFileHash(t, imagePath, "9b890acc87376697090db00091db9f6b267924cc52935063b243e72a2c4b7aa9")
 }
 
 func Test_Upstream_SaveOriginImage_NotFound(t *testing.T) {

@@ -1,6 +1,10 @@
 package assets
 
-import "src.goblgobl.com/utils/log"
+import (
+	"github.com/valyala/fasthttp"
+	"src.goblgobl.com/utils/http"
+	"src.goblgobl.com/utils/log"
+)
 
 type Env struct {
 	requestId string
@@ -60,4 +64,8 @@ func (e *Env) Request(route string) log.Logger {
 
 func (e *Env) Release() {
 	e.logger.Release()
+}
+
+func (e *Env) ServerError(err error, conn *fasthttp.RequestCtx) http.Response {
+	return http.ServerError(err, false)
 }

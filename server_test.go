@@ -165,10 +165,10 @@ func Test_AssetHandler_Transform(t *testing.T) {
 		Get(AssetHandler).
 		OK()
 
-	assert.Equal(t, res.ContentLength, 23542)
+	assert.Equal(t, res.ContentLength, 35291)
 	assert.Equal(t, res.Headers["Content-Type"], "image/png")
 	assertPublicCache(t, res.Headers["Cache-Control"], 598765)
-	assert.Equal(t, res.SHA256(), "2ef708b4d72d812b2d23f3fc74793e3fc73c4ef4b6faeb4f72f93e5046754b78")
+	assert.Equal(t, res.SHA256(), "302a6235a7215e886c6ecc618bd0d741997b0d9c81cb8af15029d49ae8fcebb1")
 	assertPNGDimensions(t, res.Bytes, 100, 150)
 
 	// check cache path
@@ -178,10 +178,10 @@ func Test_AssetHandler_Transform(t *testing.T) {
 		Get(AssetHandler).
 		OK()
 
-	assert.Equal(t, res.ContentLength, 23542)
+	assert.Equal(t, res.ContentLength, 35291)
 	assert.Equal(t, res.Headers["Content-Type"], "image/png")
 	assertPublicCache(t, res.Headers["Cache-Control"], 598765)
-	assert.Equal(t, res.SHA256(), "2ef708b4d72d812b2d23f3fc74793e3fc73c4ef4b6faeb4f72f93e5046754b78")
+	assert.Equal(t, res.SHA256(), "302a6235a7215e886c6ecc618bd0d741997b0d9c81cb8af15029d49ae8fcebb1")
 	assertPNGDimensions(t, res.Bytes, 100, 150)
 
 	// check differemt xform
@@ -191,10 +191,10 @@ func Test_AssetHandler_Transform(t *testing.T) {
 		Get(AssetHandler).
 		OK()
 
-	assert.Equal(t, res.ContentLength, 58544)
+	assert.Equal(t, res.ContentLength, 93329)
 	assert.Equal(t, res.Headers["Content-Type"], "image/png")
 	assertPublicCache(t, res.Headers["Cache-Control"], 598765)
-	assert.Equal(t, res.SHA256(), "24112d6ca9dceed6a8dc4c39480d659c55b40667adf659e1ebec30c96f093f46")
+	assert.Equal(t, res.SHA256(), "71eb3032b93c86d66e2c83911314467b32e04c4c3c78847452f917981bb2c639")
 	assertPNGDimensions(t, res.Bytes, 200, 200)
 }
 
